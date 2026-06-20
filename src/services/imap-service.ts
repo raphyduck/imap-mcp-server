@@ -978,6 +978,90 @@ export class ImapService {
     }
   }
 
+
+  async bulkMove(
+    accountId: string,
+    folderName: string,
+    uids: number[],
+    targetFolder: string,
+    chunkSize: number = 100,
+    options?: { createDestinationIfMissing?: boolean }
+  ): Promise<{ moved: number; failed: number; errors: string[]; destinationCreated?: boolean }> {
+    const client = await this.ensureConnected(accountId);
+    let destinationCreated = false;
+    if (options?.createDestinationIfMissing) {
+      const exists = await this.folderExists(accountId, targetFolder);
+      if (!exists) {
+        await this.createFolder(accountId, targetFolder);
+        destinationCreated = true;
+      }
+    }
+    let moved = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (let i = 0; i < uids.length; i += chunkSize) {
+      const chunk = uids.slice(i, i + chunkSize);
+      let lock;
+      try {
+        await this.ensureConnected(accountId);
+        lock = await client.getMailboxLock(folderName);
+        await client.messageMove(chunk.join(','), targetFolder, { uid: true });
+        moved += chunk.length;
+      } catch (err) {
+        failed += chunk.length;
+        errors.push(`Failed to move UIDs ${chunk[0]}-${chunk[chunk.length - 1]}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        const state = this.connections.get(accountId);
+        if (state) {
+          state.isConnected = false;
+        }
+      } finally {
+        if (lock) {
+          lock.release();
+        }
+      }
+    }
+    return { moved, failed, errors, destinationCreated: destinationCreated || undefined };
+  }
+
+  async bulkSetSeen(
+    accountId: string,
+    folderName: string,
+    uids: number[],
+    seen: boolean,
+    chunkSize: number = 200
+  ): Promise<{ updated: number; failed: number; errors: string[] }> {
+    const client = await this.ensureConnected(accountId);
+    let updated = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (let i = 0; i < uids.length; i += chunkSize) {
+      const chunk = uids.slice(i, i + chunkSize);
+      let lock;
+      try {
+        await this.ensureConnected(accountId);
+        lock = await client.getMailboxLock(folderName);
+        if (seen) {
+          await client.messageFlagsAdd(chunk.join(','), ['\\Seen'], { uid: true });
+        } else {
+          await client.messageFlagsRemove(chunk.join(','), ['\\Seen'], { uid: true });
+        }
+        updated += chunk.length;
+      } catch (err) {
+        failed += chunk.length;
+        errors.push(`Failed UIDs ${chunk[0]}-${chunk[chunk.length - 1]}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        const state = this.connections.get(accountId);
+        if (state) {
+          state.isConnected = false;
+        }
+      } finally {
+        if (lock) {
+          lock.release();
+        }
+      }
+    }
+    return { updated, failed, errors };
+  }
+
   private buildSearchQuery(criteria: SearchCriteria): any {
     const query: any = {};
 

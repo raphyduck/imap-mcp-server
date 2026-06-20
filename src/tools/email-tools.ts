@@ -514,6 +514,114 @@ export function emailTools(
     };
   });
 
+  // Bulk move by search criteria tool
+  server.registerTool('imap_bulk_move_by_search', {
+    description: 'Search for emails matching criteria and MOVE them all to another folder (e.g. archive newsletters: from "substack.com" -> "Archive"). Supports a read/unread filter via "seen" and a dryRun preview. Creates the destination folder if missing by default. Efficient chunked bulk operation.',
+    inputSchema: {
+      ...accountSelector,
+      folder: z.string().default('INBOX').describe('Source folder name'),
+      targetFolder: z.string().describe('Destination folder to move matching emails into'),
+      from: z.string().optional().describe('Match emails from this sender'),
+      to: z.string().optional().describe('Match emails to this recipient'),
+      subject: z.string().optional().describe('Match emails with this subject'),
+      before: z.string().optional().describe('Match emails before this date (YYYY-MM-DD)'),
+      since: z.string().optional().describe('Match emails since this date (YYYY-MM-DD)'),
+      seen: z.boolean().optional().describe('Filter by read (true) / unread (false) status'),
+      createDestinationIfMissing: z.boolean().default(true).describe('Create destination folder if missing (default: true)'),
+      chunkSize: z.coerce.number().default(100).describe('Number of emails to move per batch'),
+      dryRun: z.boolean().default(false).describe('If true, only return what would be moved without moving'),
+    }
+  }, async ({ accountId: rawAccountId, accountName, folder, targetFolder, from, to, subject, before, since, seen, createDestinationIfMissing, chunkSize, dryRun }) => {
+    const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
+    const criteria: any = {};
+    if (from) criteria.from = from;
+    if (to) criteria.to = to;
+    if (subject) criteria.subject = subject;
+    if (before) criteria.before = parseDateOnly(before);
+    if (since) criteria.since = parseDateOnly(since);
+    if (seen !== undefined) criteria.seen = seen;
+    const messages = await imapService.searchEmails(accountId, folder, criteria);
+    if (messages.length === 0) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, found: 0, moved: 0, message: 'No emails matched the search criteria' }, null, 2) }] };
+    }
+    if (dryRun) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, dryRun: true, found: messages.length, wouldMove: messages.length, targetFolder, samples: messages.slice(0, 10).map(m => ({ uid: m.uid, from: m.from, subject: m.subject, date: m.date })), message: `Would move ${messages.length} emails to ${targetFolder} (dry run)` }, null, 2) }] };
+    }
+    const uids = messages.map(m => m.uid);
+    const result = await imapService.bulkMove(accountId, folder, uids, targetFolder, chunkSize, { createDestinationIfMissing });
+    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, found: messages.length, moved: result.moved, failed: result.failed, targetFolder, destinationCreated: result.destinationCreated, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Moved ${result.moved} emails to ${targetFolder}` : `Moved ${result.moved}, ${result.failed} failed` }, null, 2) }] };
+  });
+
+  // Bulk mark read/unread by search criteria tool
+  server.registerTool('imap_bulk_mark_by_search', {
+    description: 'Search for emails matching criteria and mark them all as read or unread. markAs="read" clears notification noise; markAs="unread" resurfaces. Supports a "seen" filter (e.g. act only on currently-unread) and a dryRun preview. Efficient chunked bulk operation.',
+    inputSchema: {
+      ...accountSelector,
+      folder: z.string().default('INBOX').describe('Folder name'),
+      markAs: z.enum(['read', 'unread']).default('read').describe('Mark matching emails as read or unread'),
+      from: z.string().optional().describe('Match emails from this sender'),
+      to: z.string().optional().describe('Match emails to this recipient'),
+      subject: z.string().optional().describe('Match emails with this subject'),
+      before: z.string().optional().describe('Match emails before this date (YYYY-MM-DD)'),
+      since: z.string().optional().describe('Match emails since this date (YYYY-MM-DD)'),
+      seen: z.boolean().optional().describe('Filter by current read (true) / unread (false) status'),
+      chunkSize: z.coerce.number().default(200).describe('Number of emails per batch'),
+      dryRun: z.boolean().default(false).describe('If true, only return what would change without changing'),
+    }
+  }, async ({ accountId: rawAccountId, accountName, folder, markAs, from, to, subject, before, since, seen, chunkSize, dryRun }) => {
+    const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
+    const criteria: any = {};
+    if (from) criteria.from = from;
+    if (to) criteria.to = to;
+    if (subject) criteria.subject = subject;
+    if (before) criteria.before = parseDateOnly(before);
+    if (since) criteria.since = parseDateOnly(since);
+    if (seen !== undefined) criteria.seen = seen;
+    const messages = await imapService.searchEmails(accountId, folder, criteria);
+    if (messages.length === 0) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, found: 0, updated: 0, message: 'No emails matched the search criteria' }, null, 2) }] };
+    }
+    if (dryRun) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, dryRun: true, found: messages.length, wouldMark: markAs, samples: messages.slice(0, 10).map(m => ({ uid: m.uid, from: m.from, subject: m.subject, date: m.date })), message: `Would mark ${messages.length} emails as ${markAs} (dry run)` }, null, 2) }] };
+    }
+    const uids = messages.map(m => m.uid);
+    const result = await imapService.bulkSetSeen(accountId, folder, uids, markAs === 'read', chunkSize);
+    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, found: messages.length, updated: result.updated, failed: result.failed, markedAs: markAs, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Marked ${result.updated} emails as ${markAs}` : `Marked ${result.updated}, ${result.failed} failed` }, null, 2) }] };
+  });
+
+  // Bulk move by explicit UIDs
+  server.registerTool('imap_bulk_move', {
+    description: 'Move multiple emails (by UID list) to another folder, chunked. To move by search criteria instead, use imap_bulk_move_by_search.',
+    inputSchema: {
+      ...accountSelector,
+      folder: z.string().default('INBOX').describe('Source folder name'),
+      uids: z.array(z.coerce.number()).describe('Array of email UIDs to move'),
+      targetFolder: z.string().describe('Destination folder'),
+      createDestinationIfMissing: z.boolean().default(true).describe('Create destination folder if missing (default: true)'),
+      chunkSize: z.coerce.number().default(100).describe('Emails per batch'),
+    }
+  }, async ({ accountId: rawAccountId, accountName, folder, uids, targetFolder, createDestinationIfMissing, chunkSize }) => {
+    const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
+    const result = await imapService.bulkMove(accountId, folder, uids, targetFolder, chunkSize, { createDestinationIfMissing });
+    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, totalRequested: uids.length, moved: result.moved, failed: result.failed, targetFolder, destinationCreated: result.destinationCreated, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Moved ${result.moved} emails to ${targetFolder}` : `Moved ${result.moved}, ${result.failed} failed` }, null, 2) }] };
+  });
+
+  // Bulk mark read/unread by explicit UIDs
+  server.registerTool('imap_bulk_mark', {
+    description: 'Mark multiple emails (by UID list) as read or unread, chunked. To mark by search criteria instead, use imap_bulk_mark_by_search.',
+    inputSchema: {
+      ...accountSelector,
+      folder: z.string().default('INBOX').describe('Folder name'),
+      uids: z.array(z.coerce.number()).describe('Array of email UIDs'),
+      markAs: z.enum(['read', 'unread']).default('read').describe('Mark as read or unread'),
+      chunkSize: z.coerce.number().default(200).describe('Emails per batch'),
+    }
+  }, async ({ accountId: rawAccountId, accountName, folder, uids, markAs, chunkSize }) => {
+    const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
+    const result = await imapService.bulkSetSeen(accountId, folder, uids, markAs === 'read', chunkSize);
+    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, totalRequested: uids.length, updated: result.updated, failed: result.failed, markedAs: markAs, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Marked ${result.updated} emails as ${markAs}` : `Marked ${result.updated}, ${result.failed} failed` }, null, 2) }] };
+  });
+
   // Get latest emails tool
   server.registerTool('imap_get_latest_emails', {
     description: 'Get the most recent emails from a folder, newest first. Use this for "what just came in?" / "show my latest inbox messages" when no search filter is needed. Returns lightweight headers (uid, from, subject, date); read a specific one with imap_get_email. To filter by sender/subject/date instead, use imap_search_emails.',
