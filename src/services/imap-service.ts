@@ -120,6 +120,8 @@ export class ImapService {
         loginMethod: account.loginMethod,
       },
       logger: false,
+      greetingTimeout: 15000,
+      socketTimeout: 90000,
     });
 
     // Set up event handlers for connection management
@@ -945,6 +947,8 @@ export class ImapService {
         loginMethod: account.loginMethod,
       },
       logger: false,
+      greetingTimeout: 15000,
+      socketTimeout: 90000,
     });
 
     try {
