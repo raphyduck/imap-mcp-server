@@ -779,7 +779,7 @@ export function emailTools(
   // Reply to email tool
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_reply_to_email', {
-    description: 'Reply to an existing email identified by folder + uid. Automatically sets the recipient to the original sender, prefixes the subject with "Re:", and preserves threading (In-Reply-To/References). Set replyAll to also include the original recipients. Use this instead of imap_send_email whenever the user is responding to a message already in a mailbox.',
+    description: 'Reply to an existing email identified by folder + uid. Automatically sets the recipient to the original sender, prefixes the subject with "Re:", and preserves threading (In-Reply-To/References). Set replyAll to also include the original To AND Cc recipients; use cc/bcc to add further recipients. Use this instead of imap_send_email whenever the user is responding to a message already in a mailbox.',
     inputSchema: {
       ...accountSelector,
       folder: z.string().default('INBOX').describe('Folder containing the original email'),
@@ -787,7 +787,9 @@ export function emailTools(
       text: z.string().optional().describe('Plain text reply content'),
       html: z.string().optional().describe('HTML reply content'),
       body: z.string().optional().describe("Alias for 'text' (backward-compat)"),
-      replyAll: z.boolean().default(false).describe('Reply to all recipients'),
+      replyAll: z.boolean().default(false).describe('Reply to all recipients (original To AND original Cc)'),
+      cc: z.union([z.string(), z.array(z.string())]).optional().describe('Extra CC recipients, added on top of the original Cc when replyAll is true'),
+      bcc: z.union([z.string(), z.array(z.string())]).optional().describe('BCC recipients'),
       attachments: z.array(z.object({
         filename: z.string().describe('Attachment filename'),
         content: z.string().optional().describe('Base64 encoded content'),
@@ -795,7 +797,7 @@ export function emailTools(
         contentType: z.string().optional().describe('MIME type'),
       })).optional().describe('Email attachments'),
     }
-  }, async ({ accountId: rawAccountId, accountName, folder, uid, text, html, body, replyAll, attachments }) => {
+  }, async ({ accountId: rawAccountId, accountName, folder, uid, text, html, body, replyAll, cc, bcc, attachments }) => {
     const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
     const account = await accountManager.getAccount(accountId);
     if (!account) {
@@ -819,8 +821,9 @@ export function emailTools(
     // when the To header includes display names like 'Us <us@example.com>'.
     const accountEmail = extractEmail(account.email || account.user);
     const recipients = [originalEmail.from];
+    const ccRecipients: string[] = [];
+    const seen = new Set<string>([accountEmail, ...recipients.map(extractEmail)]);
     if (replyAll) {
-      const seen = new Set<string>([accountEmail, ...recipients.map(extractEmail)]);
       for (const addr of originalEmail.to) {
         const normalized = extractEmail(addr);
         if (!seen.has(normalized)) {
@@ -828,11 +831,30 @@ export function emailTools(
           seen.add(normalized);
         }
       }
+      // The original Cc must be carried over as well: a 'reply all' that drops
+      // the Cc line silently breaks the thread for everyone who was only in copy.
+      for (const addr of originalEmail.cc || []) {
+        const normalized = extractEmail(addr);
+        if (!seen.has(normalized)) {
+          ccRecipients.push(addr);
+          seen.add(normalized);
+        }
+      }
+    }
+    // Extra cc/bcc explicitly requested by the caller, on top of the original Cc.
+    for (const addr of (cc === undefined ? [] : (Array.isArray(cc) ? cc : [cc]))) {
+      const normalized = extractEmail(addr);
+      if (!seen.has(normalized)) {
+        ccRecipients.push(addr);
+        seen.add(normalized);
+      }
     }
 
     const emailComposer = {
       from: account.email || account.user,
       to: recipients,
+      cc: ccRecipients.length > 0 ? ccRecipients : undefined,
+      bcc,
       subject: originalEmail.subject.startsWith('Re: ') ? originalEmail.subject : `Re: ${originalEmail.subject}`,
       text: text ?? body,
       html,

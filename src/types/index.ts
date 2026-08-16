@@ -32,6 +32,7 @@ export interface EmailMessage {
   date: Date;
   from: string;
   to: string[];
+  cc?: string[];
   subject: string;
   messageId: string;
   inReplyTo?: string;
