@@ -239,6 +239,36 @@ export class ImapService {
     return await client.mailboxOpen(folderName);
   }
 
+  /**
+   * Etat complet d'un dossier : mailboxOpen (imapflow) + STATUS + QUOTA si supporte.
+   * mailboxOpen ne renvoie PAS d'objet `messages` : c'est ce qui faisait planter
+   * imap_folder_status avec "Cannot read properties of undefined (reading 'total')".
+   */
+  async folderStatus(accountId: string, folderName: string): Promise<any> {
+    const client: any = await this.ensureConnected(accountId);
+    const box: any = await client.mailboxOpen(folderName);
+    let status: any = null;
+    try {
+      status = await client.status(folderName, {
+        messages: true,
+        recent: true,
+        unseen: true,
+        uidNext: true,
+        uidValidity: true,
+      });
+    } catch (err) {
+      status = null;
+    }
+    let quota: any = null;
+    try {
+      const q = await client.getQuota(folderName);
+      if (q) quota = q;
+    } catch (err) {
+      quota = null;
+    }
+    return { box, status, quota };
+  }
+
   async getFolderStatus(accountId: string, folderName: string): Promise<{
     messages: number;
     recent: number;

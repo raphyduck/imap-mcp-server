@@ -49,22 +49,50 @@ export function folderTools(
     }
   }, async ({ accountId: rawAccountId, accountName, folder }) => {
     const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
-    const box = await imapService.selectFolder(accountId, folder);
-    
+    const { box, status, quota } = await imapService.folderStatus(accountId, folder);
+
+    const total = status?.messages ?? box?.exists ?? 0;
+    const unseen = status?.unseen ?? 0;
+    const recent = status?.recent ?? 0;
+
+    const storage = quota?.storage
+      ? {
+          usedBytes: quota.storage.usage ?? null,
+          limitBytes: quota.storage.limit ?? null,
+          usedPercent:
+            quota.storage.usage != null && quota.storage.limit
+              ? Math.round((quota.storage.usage / quota.storage.limit) * 1000) / 10
+              : null,
+        }
+      : null;
+
+    const messageQuota = quota?.messages
+      ? {
+          used: quota.messages.usage ?? null,
+          limit: quota.messages.limit ?? null,
+          usedPercent:
+            quota.messages.usage != null && quota.messages.limit
+              ? Math.round((quota.messages.usage / quota.messages.limit) * 1000) / 10
+              : null,
+        }
+      : null;
+
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
-          folder: folder,
+          folder: box?.path ?? folder,
           messages: {
-            total: box.messages.total,
-            new: box.messages.new,
-            unseen: box.messages.unseen || 0,
+            total,
+            recent,
+            unseen,
           },
-          uidvalidity: box.uidvalidity,
-          uidnext: box.uidnext,
-          flags: box.flags,
-          permanentFlags: box.permanentFlags,
+          uidvalidity: box?.uidValidity != null ? String(box.uidValidity) : null,
+          uidnext: box?.uidNext ?? null,
+          flags: box?.flags ? Array.from(box.flags) : [],
+          permanentFlags: box?.permanentFlags ? Array.from(box.permanentFlags) : [],
+          quota: quota ? { storage, messages: messageQuota } : null,
+          quotaSupported: !!quota,
         }, null, 2)
       }]
     };
