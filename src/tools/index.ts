@@ -7,6 +7,7 @@ import { accountTools } from './account-tools.js';
 import { emailTools } from './email-tools.js';
 import { folderTools } from './folder-tools.js';
 import { spamTools } from './spam-tools.js';
+import { pdfExportTools } from './pdf-export-tools.js';
 
 export function registerTools(
   server: McpServer,
@@ -26,4 +27,7 @@ export function registerTools(
 
   // Register spam detection and management tools
   spamTools(server, imapService, spamService);
+
+  // Export d'un email en PDF (justificatifs Qonto sans piece jointe) -- ajout hobbitton 21/08/2026
+  pdfExportTools(server, imapService, accountManager);
 }
