@@ -45,7 +45,8 @@ export function pdfExportTools(
       'Render an email (headers + body text) to a PDF file saved server-side under the shared volume (default /srv/filemcp). ' +
       'Meant for receipts/invoices that have NO attachment (Stripe, SaaS receipts, dividend notices): the resulting PDF can be ' +
       'attached to a Qonto transaction with qonto_upload_attachment_from_file. No bytes pass through the model. ' +
-      'Returns path, size_bytes and sha256. Does not mark the email as read.',
+      'Returns path, size_bytes, sha256 and a text preview of the rendered body (previewChars) so you can check amounts/merchant without re-reading the email. ' +
+      'The HTML part is preferred over text/plain (marketing receipts often hide the amounts in HTML only). Does not mark the email as read.',
     inputSchema: {
       accountId: z.string().optional().describe('Account ID (from imap_list_accounts). Optional if accountName is given or only one account is configured.'),
       accountName: z.string().optional().describe('Account name instead of accountId.'),
@@ -55,8 +56,9 @@ export function pdfExportTools(
       title: z.string().optional().describe('Optional title printed at the top of the PDF (e.g. "Justificatif — reçu Stripe #1234"). Defaults to the email subject.'),
       note: z.string().optional().describe('Optional note printed at the end (e.g. the matched Qonto transaction id). The messageId is always printed.'),
       maxChars: z.coerce.number().default(40000).describe('Maximum number of body characters rendered (protects against huge newsletters).'),
+      previewChars: z.coerce.number().default(1500).describe('Number of body characters returned as preview in the result (0 to disable).'),
     }
-  }, async ({ accountId: rawAccountId, accountName, folder, uid, savePath, title, note, maxChars }) => {
+  }, async ({ accountId: rawAccountId, accountName, folder, uid, savePath, title, note, maxChars, previewChars }) => {
     const accountId = accountManager.resolveAccountId(rawAccountId, accountName);
 
     const target = resolve(savePath);
@@ -151,6 +153,7 @@ export function pdfExportTools(
           messageId: email.messageId,
           body_chars: body.length,
           truncated,
+          preview: previewChars > 0 ? body.slice(0, previewChars) : undefined,
         }, null, 2)
       }]
     };
