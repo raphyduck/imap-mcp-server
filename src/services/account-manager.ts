@@ -32,10 +32,14 @@ export class AccountManager {
       };
     }
 
+    if (account.oauth2?.refreshToken) {
+      newAccount.oauth2 = { ...account.oauth2, refreshToken: this.encrypt(account.oauth2.refreshToken) };
+    }
+
     this.accounts.set(id, newAccount);
     await this.saveAccounts();
     
-    return { ...newAccount, password: account.password, smtp: account.smtp };
+    return { ...newAccount, password: account.password, smtp: account.smtp, oauth2: account.oauth2 };
   }
 
 
@@ -68,6 +72,13 @@ export class AccountManager {
       };
     }
 
+    if (processedUpdates.oauth2?.refreshToken) {
+      processedUpdates.oauth2 = {
+        ...processedUpdates.oauth2,
+        refreshToken: this.encrypt(processedUpdates.oauth2.refreshToken),
+      };
+    }
+
     // Merge updates with existing account
     const updatedAccount: ImapAccount = {
       ...existingAccount,
@@ -91,6 +102,12 @@ export class AccountManager {
       };
     }
     
+    if (decrypted.oauth2?.refreshToken) {
+    
+      decrypted.oauth2 = { ...decrypted.oauth2, refreshToken: this.decrypt(decrypted.oauth2.refreshToken) };
+    
+    }
+    
     return decrypted;
   }
 
@@ -111,6 +128,12 @@ export class AccountManager {
       };
     }
     
+    if (decrypted.oauth2?.refreshToken) {
+    
+      decrypted.oauth2 = { ...decrypted.oauth2, refreshToken: this.decrypt(decrypted.oauth2.refreshToken) };
+    
+    }
+    
     return decrypted;
   }
 
@@ -126,6 +149,12 @@ export class AccountManager {
           ...account.smtp,
           password: this.decrypt(account.smtp.password),
         };
+      }
+      
+      if (decrypted.oauth2?.refreshToken) {
+      
+        decrypted.oauth2 = { ...decrypted.oauth2, refreshToken: this.decrypt(decrypted.oauth2.refreshToken) };
+      
       }
       
       return decrypted;
@@ -183,6 +212,12 @@ export class AccountManager {
         ...account.smtp,
         password: this.decrypt(account.smtp.password),
       };
+    }
+    
+    if (decrypted.oauth2?.refreshToken) {
+    
+      decrypted.oauth2 = { ...decrypted.oauth2, refreshToken: this.decrypt(decrypted.oauth2.refreshToken) };
+    
     }
     
     return decrypted;

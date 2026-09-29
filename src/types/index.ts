@@ -13,6 +13,15 @@ export interface ImapAccount {
   keepalive?: boolean;
   smtp?: SmtpConfig;
   saveToSent?: boolean;
+  oauth2?: OAuth2Config;
+}
+
+export interface OAuth2Config {
+  provider: 'microsoft';
+  clientId: string;
+  tenant: string;
+  scope: string;
+  refreshToken: string;
 }
 
 export interface SmtpConfig {

@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { oauthTools } from './oauth-tools.js';
 import { ImapService } from '../services/imap-service.js';
 import { AccountManager } from '../services/account-manager.js';
 import { SmtpService } from '../services/smtp-service.js';
@@ -18,6 +19,7 @@ export function registerTools(
 ): void {
   // Register account management tools
   accountTools(server, accountManager, imapService, smtpService);
+  oauthTools(server, accountManager, imapService, smtpService);
 
   // Register email operation tools
   emailTools(server, imapService, accountManager, smtpService);

@@ -1,12 +1,13 @@
 import nodemailer from 'nodemailer';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { ImapAccount, EmailComposer, SmtpConfig } from '../types/index.js';
+import { getAccessToken } from './oauth-service.js';
 
 export class SmtpService {
   private transporters: Map<string, nodemailer.Transporter> = new Map();
 
   async createTransporter(account: ImapAccount): Promise<nodemailer.Transporter> {
-    if (this.transporters.has(account.id)) {
+    if (!account.oauth2 && this.transporters.has(account.id)) {
       return this.transporters.get(account.id)!;
     }
 
@@ -18,10 +19,12 @@ export class SmtpService {
       port: smtpConfig.port,
       secure,
       requireTLS,
-      auth: {
-        user: smtpConfig.user || account.user,
-        pass: smtpConfig.password || account.password,
-      },
+      auth: account.oauth2
+        ? { type: 'OAuth2' as const, user: smtpConfig.user || account.user, accessToken: await getAccessToken(account) }
+        : {
+            user: smtpConfig.user || account.user,
+            pass: smtpConfig.password || account.password,
+          },
       tls: smtpConfig.tls,
     };
 
@@ -30,7 +33,7 @@ export class SmtpService {
     // Verify connection
     await transporter.verify();
     
-    this.transporters.set(account.id, transporter);
+    if (!account.oauth2) this.transporters.set(account.id, transporter);
     return transporter;
   }
 

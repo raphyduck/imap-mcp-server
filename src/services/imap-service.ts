@@ -1,4 +1,5 @@
 import { ImapFlow } from 'imapflow';
+import { buildImapAuth } from './oauth-service.js';
 import { simpleParser } from 'mailparser';
 import { ImapAccount, EmailMessage, EmailContent, Folder, SearchCriteria } from '../types/index.js';
 import type { AccountManager } from './account-manager.js';
@@ -141,11 +142,7 @@ export class ImapService {
       host: account.host,
       port: account.port,
       secure: account.tls,
-      auth: {
-        user: account.user,
-        pass: account.password,
-        loginMethod: account.loginMethod,
-      },
+      auth: await buildImapAuth(account),
       logger: false,
       greetingTimeout: GREETING_TIMEOUT_MS,
       socketTimeout: SOCKET_TIMEOUT_MS,
@@ -1010,11 +1007,7 @@ export class ImapService {
       host: account.host,
       port: account.port,
       secure: account.tls,
-      auth: {
-        user: account.user,
-        pass: account.password,
-        loginMethod: account.loginMethod,
-      },
+      auth: await buildImapAuth(account),
       logger: false,
       greetingTimeout: GREETING_TIMEOUT_MS,
       socketTimeout: SOCKET_TIMEOUT_MS,

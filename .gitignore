@@ -39,3 +39,7 @@ temp/
 # MCP Registry publisher OAuth tokens
 .mcpregistry_github_token
 .mcpregistry_registry_token
+
+# Sauvegardes de patch
+*.bak-*
+*.patched-preview
