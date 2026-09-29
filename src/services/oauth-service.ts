@@ -4,6 +4,7 @@
 import { readFileSync, mkdirSync, promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 import type { ImapAccount, OAuth2Config } from '../types/index.js';
 import type { AccountManager } from './account-manager.js';
 
@@ -23,8 +24,12 @@ const PENDING_PATH = path.join(os.homedir(), '.imap-mcp', 'oauth-pending.json');
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 interface PendingFlow {
+  kind?: 'device' | 'authcode';
   userCode: string;
   deviceCode: string;
+  state?: string;
+  codeVerifier?: string;
+  redirectUri?: string;
   clientId: string;
   tenant: string;
   scope: string;
@@ -148,6 +153,83 @@ export async function pollMicrosoftDeviceFlow(userCode: string, waitSeconds = 60
     await removePending(userCode);
     throw new Error(`Autorisation Microsoft echouee : ${err} ${firstLine(r.json.error_description)}`);
   }
+}
+
+// Flux « code d'autorisation + PKCE » : seul flux accepte au consentement pour l'ID Thunderbird
+// sur les comptes personnels (le device code y est refuse, « first party application »).
+// L'utilisateur ouvre authorizeUrl, se connecte, accepte ; le navigateur part vers
+// http://localhost/?code=...&state=... (page en erreur, normal) : on recupere cette URL.
+export async function startMicrosoftAuthCodeFlow(opts: { clientId?: string; tenant?: string; scope?: string; loginHint?: string } = {}) {
+  const clientId = opts.clientId || MICROSOFT_DEFAULTS.clientId;
+  const tenant = opts.tenant || MICROSOFT_DEFAULTS.tenant;
+  const scope = opts.scope || MICROSOFT_DEFAULTS.scope;
+  const redirectUri = 'http://localhost';
+  const codeVerifier = crypto.randomBytes(48).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+  const state = crypto.randomBytes(12).toString('base64url');
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    redirect_uri: redirectUri,
+    response_mode: 'query',
+    scope,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+  });
+  if (opts.loginHint) params.set('login_hint', opts.loginHint);
+  const flow: PendingFlow = {
+    kind: 'authcode',
+    userCode: state,
+    deviceCode: '',
+    state,
+    codeVerifier,
+    redirectUri,
+    clientId,
+    tenant,
+    scope,
+    expiresAt: Date.now() + 30 * 60 * 1000,
+    interval: 0,
+  };
+  const list = loadPending().filter(f => f.expiresAt > Date.now());
+  list.push(flow);
+  await savePending(list);
+  return { authorizeUrl: `${authority(tenant)}/authorize?${params.toString()}`, state, expiresInSeconds: 1800 };
+}
+
+export async function completeMicrosoftAuthCodeFlow(redirectUrl: string): Promise<DevicePollResult> {
+  const cleaned = redirectUrl.trim().replace(/&amp;/g, '&');
+  let url: URL;
+  try {
+    url = new URL(cleaned);
+  } catch {
+    throw new Error('redirectUrl illisible : coller l\'URL complete http://localhost/?code=...&state=...');
+  }
+  const err = url.searchParams.get('error');
+  if (err) throw new Error(`Microsoft a refuse : ${err} ${firstLine(url.searchParams.get('error_description') || '')}`);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  if (!code || !state) throw new Error('code ou state absent de redirectUrl.');
+  const flow = loadPending().find(f => f.kind === 'authcode' && f.state === state);
+  if (!flow) throw new Error('Flux inconnu ou expire (state) : relancer imap_oauth_start.');
+  const r = await postForm(`${authority(flow.tenant)}/token`, {
+    grant_type: 'authorization_code',
+    client_id: flow.clientId,
+    code,
+    redirect_uri: flow.redirectUri!,
+    code_verifier: flow.codeVerifier!,
+    scope: flow.scope,
+  });
+  await removePending(flow.userCode);
+  if (!r.ok || !r.json.refresh_token) {
+    throw new Error(`Echange du code refuse : ${r.json.error} ${firstLine(r.json.error_description)} (code a usage unique, valable quelques minutes : relancer imap_oauth_start).`);
+  }
+  return {
+    status: 'ok',
+    oauth2: { provider: 'microsoft', clientId: flow.clientId, tenant: flow.tenant, scope: flow.scope, refreshToken: r.json.refresh_token },
+    accessToken: r.json.access_token,
+    expiresIn: r.json.expires_in || 3600,
+  };
 }
 
 export function primeAccessToken(accountId: string, accessToken: string, expiresInSeconds: number): void {
