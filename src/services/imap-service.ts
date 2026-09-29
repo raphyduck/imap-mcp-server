@@ -82,6 +82,33 @@ function enrichConnectionError(error: unknown, host: string): string {
   );
 }
 
+/**
+ * Delais reglables. Les valeurs par defaut sont volontairement INFERIEURES au
+ * budget de la passerelle MCP : mieux vaut un echec rapide et nomme qu'un
+ * "Request timeout" anonyme cote client pendant que le backend travaille encore.
+ */
+const GREETING_TIMEOUT_MS = Number(process.env.IMAP_GREETING_TIMEOUT_MS ?? 8000);
+const SOCKET_TIMEOUT_MS = Number(process.env.IMAP_SOCKET_TIMEOUT_MS ?? 25000);
+const CONNECT_DEADLINE_MS = Number(process.env.IMAP_CONNECT_DEADLINE_MS ?? 30000);
+
+/** Identite lisible d'un compte, pour que toute erreur dise DE QUI on parle. */
+function accountLabel(a: { id: string; name?: string; user: string; host: string }): string {
+  return `${a.name ?? a.id} <${a.user}> @ ${a.host}`;
+}
+
+/** Applique une echeance dure a une promesse qui pourrait ne jamais se resoudre. */
+async function withDeadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} : pas de reponse apres ${ms} ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, guard]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 interface ConnectionState {
   client: ImapFlow;
   account: ImapAccount;
@@ -120,13 +147,13 @@ export class ImapService {
         loginMethod: account.loginMethod,
       },
       logger: false,
-      greetingTimeout: 15000,
-      socketTimeout: 90000,
+      greetingTimeout: GREETING_TIMEOUT_MS,
+      socketTimeout: SOCKET_TIMEOUT_MS,
     });
 
     // Set up event handlers for connection management
     client.on('error', (err) => {
-      console.error(`IMAP error for account ${account.id}:`, err.message);
+      console.error(`IMAP error for account ${accountLabel(account)} (${account.id}):`, err.message);
       const state = this.connections.get(account.id);
       if (state) {
         state.isConnected = false;
@@ -141,9 +168,11 @@ export class ImapService {
     });
 
     try {
-      await client.connect();
+      await withDeadline(client.connect(), CONNECT_DEADLINE_MS, `Connexion IMAP ${accountLabel(account)}`);
     } catch (err) {
-      throw new Error(enrichConnectionError(err, account.host));
+      try { client.close(); } catch { /* socket deja morte */ }
+      this.connections.delete(account.id);
+      throw new Error(`${accountLabel(account)} : ${enrichConnectionError(err, account.host)}`);
     }
 
     this.connections.set(account.id, {
@@ -193,13 +222,20 @@ export class ImapService {
       this.reconnectAttempts.set(accountId, attempts + 1);
       console.log(`Reconnecting to account ${accountId} (attempt ${attempts + 1})`);
 
+      // ImapFlow n'est PAS reutilisable : rappeler connect() sur une instance
+      // morte leve "Can not re-use ImapFlow instance" et fige le compte jusqu'a
+      // un imap_disconnect manuel. On repart donc d'une instance neuve.
       try {
-        await state.client.connect();
-        state.isConnected = true;
+        try { state.client.close(); } catch { /* deja fermee */ }
+        this.connections.delete(accountId);
+        await this.connect(state.account);
         this.reconnectAttempts.set(accountId, 0);
       } catch (err) {
-        state.isConnected = false;
-        throw new Error(`Failed to reconnect: ${enrichConnectionError(err, state.account.host)}`);
+        throw new Error(`Reconnexion impossible sur ${accountLabel(state.account)} : ${enrichConnectionError(err, state.account.host)}`);
+      }
+      state = this.connections.get(accountId);
+      if (!state) {
+        throw new Error(`Reconnexion perdue pour le compte ${accountId}`);
       }
     }
 
@@ -980,8 +1016,8 @@ export class ImapService {
         loginMethod: account.loginMethod,
       },
       logger: false,
-      greetingTimeout: 15000,
-      socketTimeout: 90000,
+      greetingTimeout: GREETING_TIMEOUT_MS,
+      socketTimeout: SOCKET_TIMEOUT_MS,
     });
 
     try {
