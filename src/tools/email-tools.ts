@@ -814,6 +814,11 @@ export function emailTools(
       const match = addr.match(/<([^>]+)>/);
       return (match ? match[1] : addr).trim().toLowerCase();
     };
+    // Defensive: split any header value that still holds several addresses
+    // ('A <a@x>, "B, C" <b@y>') into one entry per address, commas inside
+    // quotes preserved.
+    const splitAddresses = (list: string[] | undefined): string[] =>
+      (list || []).flatMap((v) => (v.match(/(?:"[^"]*"|[^,])+/g) || []).map((x) => x.trim()).filter((x) => x.includes('@')));
 
     // Prepare reply. replyAll: include original To recipients but EXCLUDE
     // our own address (otherwise the SMTP server delivers a copy back to
@@ -824,7 +829,7 @@ export function emailTools(
     const ccRecipients: string[] = [];
     const seen = new Set<string>([accountEmail, ...recipients.map(extractEmail)]);
     if (replyAll) {
-      for (const addr of originalEmail.to) {
+      for (const addr of splitAddresses(originalEmail.to)) {
         const normalized = extractEmail(addr);
         if (!seen.has(normalized)) {
           recipients.push(addr);
@@ -833,7 +838,7 @@ export function emailTools(
       }
       // The original Cc must be carried over as well: a 'reply all' that drops
       // the Cc line silently breaks the thread for everyone who was only in copy.
-      for (const addr of originalEmail.cc || []) {
+      for (const addr of splitAddresses(originalEmail.cc)) {
         const normalized = extractEmail(addr);
         if (!seen.has(normalized)) {
           ccRecipients.push(addr);

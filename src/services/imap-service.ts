@@ -411,10 +411,31 @@ export class ImapService {
     }
   }
 
+  private flattenParsedAddresses(field: any): string[] {
+    if (!field) return [];
+    const out: string[] = [];
+    const walk = (entries: any[]) => {
+      for (const e of entries || []) {
+        if (e?.group) walk(e.group);
+        else if (e?.address) out.push(this.formatAddress(e));
+      }
+    };
+    for (const obj of Array.isArray(field) ? field : [field]) {
+      if (Array.isArray(obj?.value) && obj.value.length) walk(obj.value);
+      else if (obj?.text) out.push(obj.text);
+    }
+    return out;
+  }
+
   private formatAddress(addr: any): string {
     if (!addr) return '';
     if (addr.name) {
-      return `${addr.name} <${addr.address}>`;
+      // Quote display names holding RFC 5322 specials (a comma in
+      // 'Marinucci, CEN L-R' would otherwise split one recipient into two).
+      const name = /[",;:<>@()\[\]\\]/.test(addr.name)
+        ? `"${String(addr.name).replace(/(["\\])/g, '\\$1')}"`
+        : addr.name;
+      return `${name} <${addr.address}>`;
     }
     return addr.address || '';
   }
@@ -473,8 +494,11 @@ export class ImapService {
         uid,
         date: parsed.date || new Date(),
         from: parsed.from?.text || '',
-        to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to.map((t: any) => t.text || '') : [parsed.to.text || '']) : [],
-        cc: parsed.cc ? (Array.isArray(parsed.cc) ? parsed.cc.map((t: any) => t.text || '') : [parsed.cc.text || '']) : [],
+        // One entry per address: mailparser's AddressObject.text is the WHOLE
+        // header ('A <a@x>, B <b@y>'), which made replyAll drop every Cc when the
+        // header also contained our own address.
+        to: this.flattenParsedAddresses(parsed.to),
+        cc: this.flattenParsedAddresses(parsed.cc),
         subject: parsed.subject || '',
         messageId: parsed.messageId || '',
         inReplyTo: parsed.inReplyTo as string | undefined,
