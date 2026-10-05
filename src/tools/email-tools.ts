@@ -96,16 +96,15 @@ export function emailTools(
     if (searchCriteria.seen !== undefined) criteria.seen = searchCriteria.seen;
     if (searchCriteria.flagged !== undefined) criteria.flagged = searchCriteria.flagged;
     
-    const messages = await imapService.searchEmails(accountId, folder, criteria);
-    const limitedMessages = messages.slice(0, limit);
-    
+    const { messages, totalFound } = await imapService.searchEmailsLimited(accountId, folder, criteria, limit);
+
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
-          totalFound: messages.length,
-          returned: limitedMessages.length,
-          messages: limitedMessages,
+          totalFound,
+          returned: messages.length,
+          messages,
         }, null, 2)
       }]
     };
@@ -119,7 +118,7 @@ export function emailTools(
       folder: z.string().default('INBOX').describe('Folder name'),
       uid: z.coerce.number().describe('Email UID'),
       maxContentLength: z.coerce.number().default(10000).describe('Maximum characters to return for text and HTML body content'),
-      includeAttachmentText: z.boolean().default(true).describe('Include text attachment previews when available'),
+      includeAttachmentText: z.boolean().default(false).describe('Include text attachment previews (text files and PDF text) when available. Off by default: every attached PDF would otherwise be parsed and returned, up to maxAttachmentTextChars each.'),
       maxAttachmentTextChars: z.coerce.number().default(100000).describe('Maximum characters to return per text attachment'),
       includeHeaders: z.boolean().default(false).describe('Include raw email headers (e.g. List-Unsubscribe, List-Unsubscribe-Post)'),
     }
@@ -475,10 +474,11 @@ export function emailTools(
     if (before) criteria.before = parseDateOnly(before);
     if (since) criteria.since = parseDateOnly(since);
 
-    // First search for matching emails
-    const messages = await imapService.searchEmails(accountId, folder, criteria);
+    // First search for matching emails: every UID, but only ten envelopes (the preview).
+    const { messages, uids } = await imapService.searchEmailsLimited(accountId, folder, criteria, 10);
+    const found = uids.length;
 
-    if (messages.length === 0) {
+    if (found === 0) {
       return {
         content: [{
           type: 'text',
@@ -499,30 +499,29 @@ export function emailTools(
           text: JSON.stringify({
             success: true,
             dryRun: true,
-            found: messages.length,
-            wouldDelete: messages.length,
-            samples: messages.slice(0, 10).map(m => ({
+            found: found,
+            wouldDelete: found,
+            samples: messages.map(m => ({
               uid: m.uid,
               from: m.from,
               subject: m.subject,
               date: m.date,
             })),
-            message: `Would delete ${messages.length} emails (dry run)`,
+            message: `Would delete ${found} emails (dry run)`,
           }, null, 2)
         }]
       };
     }
 
     // Delete all matching emails
-    const uids = messages.map(m => m.uid);
-    const result = await imapService.bulkDelete(accountId, folder, uids, chunkSize);
+        const result = await imapService.bulkDelete(accountId, folder, uids, chunkSize);
 
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           success: result.failed === 0,
-          found: messages.length,
+          found: found,
           deleted: result.deleted,
           failed: result.failed,
           errors: result.errors.length > 0 ? result.errors : undefined,
@@ -560,16 +559,16 @@ export function emailTools(
     if (before) criteria.before = parseDateOnly(before);
     if (since) criteria.since = parseDateOnly(since);
     if (seen !== undefined) criteria.seen = seen;
-    const messages = await imapService.searchEmails(accountId, folder, criteria);
-    if (messages.length === 0) {
+    const { messages, uids } = await imapService.searchEmailsLimited(accountId, folder, criteria, 10);
+    const found = uids.length;
+    if (found === 0) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, found: 0, moved: 0, message: 'No emails matched the search criteria' }, null, 2) }] };
     }
     if (dryRun) {
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, dryRun: true, found: messages.length, wouldMove: messages.length, targetFolder, samples: messages.slice(0, 10).map(m => ({ uid: m.uid, from: m.from, subject: m.subject, date: m.date })), message: `Would move ${messages.length} emails to ${targetFolder} (dry run)` }, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, dryRun: true, found: found, wouldMove: found, targetFolder, samples: messages.map(m => ({ uid: m.uid, from: m.from, subject: m.subject, date: m.date })), message: `Would move ${found} emails to ${targetFolder} (dry run)` }, null, 2) }] };
     }
-    const uids = messages.map(m => m.uid);
-    const result = await imapService.bulkMove(accountId, folder, uids, targetFolder, chunkSize, { createDestinationIfMissing });
-    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, found: messages.length, moved: result.moved, failed: result.failed, targetFolder, destinationCreated: result.destinationCreated, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Moved ${result.moved} emails to ${targetFolder}` : `Moved ${result.moved}, ${result.failed} failed` }, null, 2) }] };
+        const result = await imapService.bulkMove(accountId, folder, uids, targetFolder, chunkSize, { createDestinationIfMissing });
+    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, found: found, moved: result.moved, failed: result.failed, targetFolder, destinationCreated: result.destinationCreated, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Moved ${result.moved} emails to ${targetFolder}` : `Moved ${result.moved}, ${result.failed} failed` }, null, 2) }] };
   });
 
   // Bulk mark read/unread by search criteria tool
@@ -597,16 +596,16 @@ export function emailTools(
     if (before) criteria.before = parseDateOnly(before);
     if (since) criteria.since = parseDateOnly(since);
     if (seen !== undefined) criteria.seen = seen;
-    const messages = await imapService.searchEmails(accountId, folder, criteria);
-    if (messages.length === 0) {
+    const { messages, uids } = await imapService.searchEmailsLimited(accountId, folder, criteria, 10);
+    const found = uids.length;
+    if (found === 0) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, found: 0, updated: 0, message: 'No emails matched the search criteria' }, null, 2) }] };
     }
     if (dryRun) {
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, dryRun: true, found: messages.length, wouldMark: markAs, samples: messages.slice(0, 10).map(m => ({ uid: m.uid, from: m.from, subject: m.subject, date: m.date })), message: `Would mark ${messages.length} emails as ${markAs} (dry run)` }, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, dryRun: true, found: found, wouldMark: markAs, samples: messages.map(m => ({ uid: m.uid, from: m.from, subject: m.subject, date: m.date })), message: `Would mark ${found} emails as ${markAs} (dry run)` }, null, 2) }] };
     }
-    const uids = messages.map(m => m.uid);
-    const result = await imapService.bulkSetSeen(accountId, folder, uids, markAs === 'read', chunkSize);
-    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, found: messages.length, updated: result.updated, failed: result.failed, markedAs: markAs, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Marked ${result.updated} emails as ${markAs}` : `Marked ${result.updated}, ${result.failed} failed` }, null, 2) }] };
+        const result = await imapService.bulkSetSeen(accountId, folder, uids, markAs === 'read', chunkSize);
+    return { content: [{ type: 'text', text: JSON.stringify({ success: result.failed === 0, found: found, updated: result.updated, failed: result.failed, markedAs: markAs, errors: result.errors.length > 0 ? result.errors : undefined, message: result.failed === 0 ? `Marked ${result.updated} emails as ${markAs}` : `Marked ${result.updated}, ${result.failed} failed` }, null, 2) }] };
   });
 
   // Bulk move by explicit UIDs

@@ -23,8 +23,7 @@ export function spamTools(
     if (from) criteria.from = from;
     if (since) criteria.since = new Date(since);
 
-    const messages = await imapService.searchEmails(accountId, folder, criteria);
-    const limitedMessages = messages.slice(0, limit);
+    const { messages: limitedMessages } = await imapService.searchEmailsLimited(accountId, folder, criteria, limit);
 
     const emailData = limitedMessages.map(m => ({
       uid: m.uid,
@@ -68,8 +67,7 @@ export function spamTools(
       dryRun: z.boolean().default(true).describe('If true, only report what would be deleted without deleting'),
     }
   }, async ({ accountId, folder, limit, minConfidence, dryRun }) => {
-    const messages = await imapService.searchEmails(accountId, folder, {});
-    const limitedMessages = messages.slice(0, limit);
+    const { messages: limitedMessages } = await imapService.searchEmailsLimited(accountId, folder, {}, limit);
 
     const emailData = limitedMessages.map(m => ({
       uid: m.uid,
@@ -155,8 +153,7 @@ export function spamTools(
       minCount: z.coerce.number().default(2).describe('Minimum email count per domain to include'),
     }
   }, async ({ accountId, folder, limit, minCount }) => {
-    const messages = await imapService.searchEmails(accountId, folder, {});
-    const limitedMessages = messages.slice(0, limit);
+    const { messages: limitedMessages } = await imapService.searchEmailsLimited(accountId, folder, {}, limit);
 
     const emailData = limitedMessages.map(m => ({
       uid: m.uid,
@@ -284,11 +281,12 @@ export function spamTools(
     }
   }, async ({ accountId, folder, domain, dryRun }) => {
     // Search for emails from the domain
-    const messages = await imapService.searchEmails(accountId, folder, {
+    const { messages, uids } = await imapService.searchEmailsLimited(accountId, folder, {
       from: `@${domain}`,
-    });
+    }, 10);
+    const found = uids.length;
 
-    if (messages.length === 0) {
+    if (found === 0) {
       return {
         content: [{
           type: 'text',
@@ -310,22 +308,21 @@ export function spamTools(
             success: true,
             dryRun: true,
             domain,
-            found: messages.length,
-            wouldDelete: messages.length,
-            samples: messages.slice(0, 10).map(m => ({
+            found: found,
+            wouldDelete: found,
+            samples: messages.map(m => ({
               uid: m.uid,
               from: m.from,
               subject: m.subject,
               date: m.date,
             })),
-            message: `Would delete ${messages.length} emails from "${domain}" (dry run). Set dryRun=false to actually delete.`,
+            message: `Would delete ${found} emails from "${domain}" (dry run). Set dryRun=false to actually delete.`,
           }, null, 2)
         }]
       };
     }
 
-    const uids = messages.map(m => m.uid);
-    const result = await imapService.bulkDelete(accountId, folder, uids);
+        const result = await imapService.bulkDelete(accountId, folder, uids);
 
     return {
       content: [{
@@ -333,7 +330,7 @@ export function spamTools(
         text: JSON.stringify({
           success: result.failed === 0,
           domain,
-          found: messages.length,
+          found: found,
           deleted: result.deleted,
           failed: result.failed,
           errors: result.errors.length > 0 ? result.errors : undefined,

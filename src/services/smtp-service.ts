@@ -3,24 +3,50 @@ import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { ImapAccount, EmailComposer, SmtpConfig } from '../types/index.js';
 import { getAccessToken } from './oauth-service.js';
 
-export class SmtpService {
-  private transporters: Map<string, nodemailer.Transporter> = new Map();
+// Delai par socket SMTP : un serveur qui ne repond pas en une minute ne repondra pas.
+const SMTP_SOCKET_TIMEOUT_MS = Number(process.env.SMTP_SOCKET_TIMEOUT_MS ?? 60000);
 
+interface CachedTransporter {
+  transporter: nodemailer.Transporter;
+  // Le jeton OAuth2 avec lequel le transporteur a ete construit : un jeton
+  // renouvele vaut un transporteur neuf, pas une reconnexion sur l'ancien.
+  accessToken?: string;
+}
+
+export class SmtpService {
+  private transporters: Map<string, CachedTransporter> = new Map();
+
+  /**
+   * Un transporteur par compte, en POOL (une connexion gardee ouverte entre deux
+   * envois, refermee seule apres inactivite). Jusqu'au 05/10/2026 : TCP + TLS + AUTH
+   * par envoi, un `verify()` de plus a la creation (donc deux connexions pour un
+   * message), et jamais de cache pour les comptes OAuth2.
+   */
   async createTransporter(account: ImapAccount): Promise<nodemailer.Transporter> {
-    if (!account.oauth2 && this.transporters.has(account.id)) {
-      return this.transporters.get(account.id)!;
+    const accessToken = account.oauth2 ? await getAccessToken(account) : undefined;
+    const cached = this.transporters.get(account.id);
+    if (cached && cached.accessToken === accessToken) {
+      return cached.transporter;
+    }
+    if (cached) {
+      try { cached.transporter.close(); } catch { /* deja ferme */ }
+      this.transporters.delete(account.id);
     }
 
     const smtpConfig = account.smtp || this.getDefaultSmtpConfig(account);
     const { secure, requireTLS } = this.resolveTlsMode(smtpConfig.port, smtpConfig.secure);
 
     const transporterOptions = {
+      pool: true as const,
+      maxConnections: 1,
+      maxMessages: 100,
+      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
       host: smtpConfig.host,
       port: smtpConfig.port,
       secure,
       requireTLS,
       auth: account.oauth2
-        ? { type: 'OAuth2' as const, user: smtpConfig.user || account.user, accessToken: await getAccessToken(account) }
+        ? { type: 'OAuth2' as const, user: smtpConfig.user || account.user, accessToken }
         : {
             user: smtpConfig.user || account.user,
             pass: smtpConfig.password || account.password,
@@ -29,11 +55,7 @@ export class SmtpService {
     };
 
     const transporter = nodemailer.createTransport(transporterOptions);
-    
-    // Verify connection
-    await transporter.verify();
-    
-    if (!account.oauth2) this.transporters.set(account.id, transporter);
+    this.transporters.set(account.id, { transporter, accessToken });
     return transporter;
   }
 
@@ -156,27 +178,17 @@ export class SmtpService {
     }
   }
 
-  async verifySmtpConnection(account: ImapAccount): Promise<boolean> {
-    try {
-      const transporter = await this.createTransporter(account);
-      await transporter.verify();
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
   disconnect(accountId: string): void {
-    const transporter = this.transporters.get(accountId);
-    if (transporter) {
-      transporter.close();
+    const cached = this.transporters.get(accountId);
+    if (cached) {
+      try { cached.transporter.close(); } catch { /* deja ferme */ }
       this.transporters.delete(accountId);
     }
   }
 
   disconnectAll(): void {
-    for (const [accountId, transporter] of this.transporters) {
-      transporter.close();
+    for (const { transporter } of this.transporters.values()) {
+      try { transporter.close(); } catch { /* deja ferme */ }
     }
     this.transporters.clear();
   }
