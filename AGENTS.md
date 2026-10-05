@@ -22,8 +22,9 @@ working in this repository.
     mark read/unread, delete, bulk delete, move, attachments, upload, threads.
   - `folder-tools.ts` — list, status, create, unread counts.
   - `spam-tools.ts` — spam analysis, domain stats, allow/deny lists.
-- **Web setup wizard** — `src/web/server.ts` (Express) serves `public/` for
-  account onboarding (`npm run setup` / `imap-setup`).
+- Accounts are managed through the `imap_*_account` tools only. The former web
+  setup wizard (`src/web`, `imap-setup`) was removed on 05/10/2026: it served the
+  decrypted account store over HTTP without authentication.
 - **Types** — `src/types/index.ts`.
 - All tools return **JSON-formatted text** content; errors are returned as
   structured JSON where practical rather than thrown for caller-facing failures.
@@ -37,7 +38,6 @@ npm test             # run the vitest suite (run mode)
 npm run test:watch   # vitest in watch mode
 npm run lint         # tsc --noEmit type-check
 npm run dev          # run the server from source (tsx watch)
-npm run setup        # launch the web setup wizard
 ```
 
 Always run `npm run build` **and** `npm test` before committing changes that

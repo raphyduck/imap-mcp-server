@@ -11,7 +11,6 @@ A powerful Model Context Protocol (MCP) server that provides seamless IMAP email
 - 📁 **Folder Management**: List folders, check status, get unread counts
 - 🔄 **Multiple Account Support**: Manage multiple IMAP accounts simultaneously
 - 🛡️ **Type-Safe**: Built with TypeScript for reliability
-- 🌐 **Web-Based Setup Wizard**: Easy account configuration with provider presets
 - 📱 **15+ Email Providers**: Pre-configured settings for Gmail, Outlook, Yahoo, and more
 - 🔗 **Auto SMTP Configuration**: Automatic SMTP settings based on IMAP provider
 
@@ -61,54 +60,17 @@ npm run build
 
 Accounts are stored encrypted in `~/.imap-mcp/accounts.json`. This file is **shared by all run modes** — whether you start the server via `npx`, a global install, or a local clone, they all read the same accounts. So you only need to set up your accounts once.
 
-### Setting Up Accounts in npx Mode
+### Adding Accounts
 
-If you run the server via `npx` (no clone), you have two ways to add accounts:
-
-**Option A — Run the setup wizard directly via npx (no install needed):**
-
-```bash
-npx -p imap-mcp-server imap-setup
-```
-
-This launches the same web-based wizard described below and writes to `~/.imap-mcp/accounts.json`, which your `npx`-configured MCP server then picks up automatically.
-
-**Option B — Add accounts straight from your AI client:**
-
-Once the MCP server is configured, just ask your assistant to add an account — it uses the `imap_add_account` tool. For example:
+Accounts are added from your AI client, with the `imap_add_account` tool. Once the MCP server is configured, just ask your assistant, for example:
 
 > "Add my IMAP account: host imap.gmail.com, port 993, user me@gmail.com, password …"
 
-No separate setup step required.
-
-### Web-Based Setup Wizard (Recommended)
-
-After installation, run the setup wizard:
-
-```bash
-npm run setup
-```
-
-Or if installed globally:
-
-```bash
-imap-setup
-```
-
-Or directly via npx without installing:
-
-```bash
-npx -p imap-mcp-server imap-setup
-```
-
-This will:
-1. Start a local web server
-2. Open your browser to the setup wizard
-3. Guide you through adding email accounts with pre-configured settings
+`imap_update_account`, `imap_test_account`, `imap_remove_account` and the `imap_oauth_*` tools cover the rest of an account's life. The former web-based setup wizard (`imap-setup`) was removed: it served the decrypted account store over HTTP without authentication.
 
 ### Supported Email Providers
 
-The setup wizard includes pre-configured settings for:
+Known IMAP/SMTP settings (host, port, security) for:
 - Gmail / Google Workspace
 - Microsoft Outlook / Hotmail / Live
 - Yahoo Mail

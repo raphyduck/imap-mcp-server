@@ -35,40 +35,6 @@ describe('Tools Module', () => {
   });
 });
 
-describe('Email Providers', () => {
-  it('should export email providers list', async () => {
-    const providersModule = await import('../src/providers/email-providers.js');
-    expect(providersModule.emailProviders).toBeDefined();
-    expect(Array.isArray(providersModule.emailProviders)).toBe(true);
-  });
-
-  it('should have provider detection function', async () => {
-    const providersModule = await import('../src/providers/email-providers.js');
-    expect(providersModule.getProviderByEmail).toBeDefined();
-    expect(typeof providersModule.getProviderByEmail).toBe('function');
-  });
-
-  it('should detect gmail provider', async () => {
-    const { getProviderByEmail } = await import('../src/providers/email-providers.js');
-    const provider = getProviderByEmail('user@gmail.com');
-    expect(provider).toBeDefined();
-    expect(provider?.name).toBe('Gmail');
-  });
-
-  it('should detect outlook provider', async () => {
-    const { getProviderByEmail } = await import('../src/providers/email-providers.js');
-    const provider = getProviderByEmail('user@outlook.com');
-    expect(provider).toBeDefined();
-    expect(provider?.name).toBe('Outlook');
-  });
-
-  it('should return undefined for unknown domain', async () => {
-    const { getProviderByEmail } = await import('../src/providers/email-providers.js');
-    const provider = getProviderByEmail('user@unknowndomain12345.com');
-    expect(provider).toBeUndefined();
-  });
-});
-
 describe('Types', () => {
   it('should export all required types', async () => {
     // This test ensures the types module compiles and exports correctly

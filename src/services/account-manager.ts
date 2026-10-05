@@ -191,7 +191,7 @@ export class AccountManager {
       return all[0].id;
     }
     if (all.length === 0) {
-      throw new Error('No accounts configured. Add one with imap_add_account (or run the setup wizard).');
+      throw new Error('No accounts configured. Add one with imap_add_account.');
     }
     throw new Error(
       `Multiple accounts are configured (${all.length}). Specify accountId or accountName. Use imap_list_accounts to see them.`

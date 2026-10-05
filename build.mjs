@@ -23,25 +23,4 @@ await esbuild.build({
   banner: shebang,
 });
 
-// Build setup entry point
-await esbuild.build({
-  entryPoints: ['src/setup.ts'],
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  outfile: 'dist/setup.js',
-  external,
-  banner: shebang,
-});
-
-// Build web server entry point
-await esbuild.build({
-  entryPoints: ['src/web/server.ts'],
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  outfile: 'dist/web/server.js',
-  external,
-});
-
 console.log('Build complete!');

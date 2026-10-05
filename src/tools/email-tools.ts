@@ -3,7 +3,7 @@ import { ImapService } from '../services/imap-service.js';
 import { AccountManager } from '../services/account-manager.js';
 import { SmtpService } from '../services/smtp-service.js';
 import { z } from 'zod';
-import { join } from 'path';
+import { join, basename, resolve, sep } from 'path';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 
@@ -27,6 +27,28 @@ const buildAttachments = (atts?: AttachmentInput[]) =>
   }));
 
 const DOWNLOAD_DIR = process.env.IMAP_DOWNLOAD_DIR || join(homedir(), 'Downloads', 'imap-attachments');
+
+// Where a downloaded attachment may be written. `savePath` comes from the caller
+// (an LLM) and the attachment's filename from the sender: neither is trusted. A
+// path is accepted only under the downloads directory or under IMAP_SAVE_ROOT
+// (default: the PDF export root, the shared volume), and a filename keeps only its
+// last segment, so a `filename="../../x"` header cannot climb out.
+const SAVE_ROOT = process.env.IMAP_SAVE_ROOT || process.env.IMAP_PDF_EXPORT_ROOT || '/srv/filemcp';
+
+export function safeAttachmentName(filename: string): string {
+  const name = basename(filename || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return name && name !== '.' && name !== '..' ? name : 'attachment';
+}
+
+export function resolveSaveTarget(savePath: string | undefined, filename: string): string {
+  if (!savePath) return join(resolve(DOWNLOAD_DIR), safeAttachmentName(filename));
+  const target = resolve(savePath);
+  const roots = [resolve(DOWNLOAD_DIR), resolve(SAVE_ROOT)];
+  if (!roots.some(root => target === root || target.startsWith(root + sep))) {
+    throw new Error(`savePath must be under ${roots.join(' or ')} (got ${target})`);
+  }
+  return target;
+}
 const MAX_UPLOAD_SIZE = parseInt(process.env.IMAP_MAX_UPLOAD_SIZE ?? '', 10) || 25 * 1024 * 1024;
 const UPLOAD_TTL_MS = parseInt(process.env.IMAP_UPLOAD_TTL_MS ?? '', 10) || 24 * 60 * 60 * 1000;
 
@@ -199,7 +221,7 @@ export function emailTools(
       folder: z.string().default('INBOX').describe('Folder name'),
       uid: z.coerce.number().describe('Email UID'),
       filename: z.string().describe('Attachment filename or contentId'),
-      savePath: z.string().optional().describe('Optional file path to save the attachment to. If not provided, files are saved to the shared downloads directory.'),
+      savePath: z.string().optional().describe('Optional absolute path to save the attachment to, under the downloads directory or the shared volume (IMAP_SAVE_ROOT). If not provided, files are saved to the shared downloads directory under the attachment\'s own name.'),
       extractText: z.boolean().default(true).describe('For PDFs, extract and return text content inline'),
     }
   }, async ({ accountId: rawAccountId, accountName, folder, uid, filename, savePath, extractText }) => {
@@ -235,9 +257,8 @@ export function emailTools(
         // Also save the file for binary access
         const fs = await import('fs');
         const path = await import('path');
-        const downloadDir = savePath ? path.dirname(savePath) : DOWNLOAD_DIR;
-        fs.mkdirSync(downloadDir, { recursive: true });
-        const targetPath = savePath || path.join(DOWNLOAD_DIR, resolvedFilename);
+        const targetPath = resolveSaveTarget(savePath, resolvedFilename);
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
         fs.writeFileSync(targetPath, content);
 
         return {
@@ -263,9 +284,8 @@ export function emailTools(
     // Save to shared downloads directory
     const fs = await import('fs');
     const path = await import('path');
-    const downloadDir = savePath ? path.dirname(savePath) : DOWNLOAD_DIR;
-    fs.mkdirSync(downloadDir, { recursive: true });
-    const targetPath = savePath || path.join(DOWNLOAD_DIR, resolvedFilename);
+    const targetPath = resolveSaveTarget(savePath, resolvedFilename);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.writeFileSync(targetPath, content);
 
     return {
