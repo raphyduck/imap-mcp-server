@@ -19,6 +19,7 @@ class MockImapFlow {
   public messageMoveMock = vi.fn().mockResolvedValue({ path: 'INBOX', destination: 'Archive', uidMap: new Map([[123, 456]]) });
   public mailboxCreateMock = vi.fn().mockResolvedValue({ path: 'NewFolder', created: true });
   public statusMock = vi.fn().mockResolvedValue({ messages: 10 });
+  public downloadMock = vi.fn().mockResolvedValue({ meta: {}, content: null });
   public usable = true;
   public onMock = vi.fn();
 
@@ -36,6 +37,7 @@ class MockImapFlow {
   messageMove(uid: any, target: any, opts: any) { return this.messageMoveMock(uid, target, opts); }
   mailboxCreate(path: any) { return this.mailboxCreateMock(path); }
   status(name: string, opts: any) { return this.statusMock(name, opts); }
+  download(uid: any, part: any, opts: any) { return this.downloadMock(uid, part, opts); }
   on(event: string, handler: any) { return this.onMock(event, handler); }
 }
 
@@ -63,6 +65,7 @@ vi.mock('imapflow', () => {
         this.messageMove = mockInstance.messageMove.bind(mockInstance);
         this.mailboxCreate = mockInstance.mailboxCreate.bind(mockInstance);
         this.status = mockInstance.status.bind(mockInstance);
+        this.download = mockInstance.download.bind(mockInstance);
         this.on = mockInstance.on.bind(mockInstance);
       }
     },
@@ -290,11 +293,77 @@ describe('ImapService', () => {
       await imapService.connect(mockAccount);
       await imapService.searchEmails(mockAccount.id, 'INBOX', {});
 
+      // Du plus recent au plus ancien : c'est l'ordre dans lequel une limite coupe.
       expect(mockInstance.fetchMock).toHaveBeenCalledWith(
-        [101, 105],
+        [105, 101],
         expect.objectContaining({ uid: true, envelope: true, flags: true, internalDate: true }),
         { uid: true }
       );
+    });
+
+    it('fetches only the newest `limit` envelopes but reports every UID found', async () => {
+      mockInstance.searchMock.mockResolvedValue([101, 105, 103]);
+      mockInstance.fetchMock.mockReturnValue({
+        [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      });
+
+      await imapService.connect(mockAccount);
+      const result = await imapService.searchEmailsLimited(mockAccount.id, 'INBOX', {}, 2);
+
+      expect(mockInstance.fetchMock).toHaveBeenCalledWith([105, 103], expect.anything(), { uid: true });
+      expect(result.totalFound).toBe(3);
+      expect(result.uids).toEqual([105, 103, 101]);
+    });
+
+    it('a limit of zero fetches no envelope at all (UIDs only)', async () => {
+      mockInstance.searchMock.mockResolvedValue([7, 8, 9]);
+
+      await imapService.connect(mockAccount);
+      const result = await imapService.searchEmailsLimited(mockAccount.id, 'INBOX', { seen: false }, 0);
+
+      expect(mockInstance.fetchMock).not.toHaveBeenCalled();
+      expect(result.uids).toEqual([9, 8, 7]);
+      expect(result.messages).toEqual([]);
+    });
+  });
+
+  describe('sessions (05/10/2026)', () => {
+    it('two concurrent connects share one handshake', async () => {
+      await Promise.all([imapService.connect(mockAccount), imapService.connect(mockAccount)]);
+      expect(mockInstance.connectMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('an idle connection is logged out by the reaper, a busy one is kept', async () => {
+      await imapService.connect(mockAccount);
+      const state = (imapService as any).connections.get(mockAccount.id);
+      state.lastUsed = Date.now() - 2 * 600000;
+      // Une commande en cours (idling === false) : on ne coupe pas.
+      state.client.idling = false;
+      expect(await imapService.reapIdle()).toEqual([]);
+      state.client.idling = true;
+      expect(await imapService.reapIdle()).toEqual([mockAccount.id]);
+      expect(mockInstance.logoutMock).toHaveBeenCalledTimes(1);
+      expect((imapService as any).connections.has(mockAccount.id)).toBe(false);
+    });
+
+    it('the folder list is cached between two writes', async () => {
+      mockInstance.listMock.mockResolvedValue([{ path: 'INBOX', delimiter: '/', flags: new Set() }]);
+      await imapService.connect(mockAccount);
+      await imapService.listFolders(mockAccount.id);
+      expect(await imapService.folderExists(mockAccount.id, 'INBOX')).toBe(true);
+      expect(mockInstance.listMock).toHaveBeenCalledTimes(1);
+      // Une creation de dossier invalide le cache.
+      await imapService.createFolder(mockAccount.id, 'Archive');
+      await imapService.listFolders(mockAccount.id);
+      expect(mockInstance.listMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('disconnectAll logs every connection out', async () => {
+      await imapService.connect(mockAccount);
+      await imapService.connect({ ...mockAccount, id: 'second' });
+      await imapService.disconnectAll();
+      expect(mockInstance.logoutMock).toHaveBeenCalledTimes(2);
+      expect((imapService as any).connections.size).toBe(0);
     });
   });
 
@@ -756,6 +825,32 @@ describe('ImapService', () => {
         headers: new Map(),
         attachments: [],
       } as any);
+    });
+
+    it('downloads one part from the BODYSTRUCTURE instead of the whole message', async () => {
+      const { Readable } = await import('stream');
+      mockInstance.fetchOneMock.mockImplementation((uid: number, query: any) =>
+        Promise.resolve(query.bodyStructure
+          ? { bodyStructure: { type: 'multipart/mixed', childNodes: [
+              { part: '1', type: 'text/plain' },
+              { part: '2', type: 'application/pdf', disposition: 'attachment',
+                dispositionParameters: { filename: 'report.pdf' } },
+            ] } }
+          : { source: Buffer.from('should not be needed') }));
+      mockInstance.downloadMock.mockResolvedValue({
+        meta: { contentType: 'application/pdf', filename: 'report.pdf' },
+        content: Readable.from([Buffer.from('%PDF-'), Buffer.from('1.4')]),
+      });
+
+      const parsesAvant = mockedSimpleParser.mock.calls.length;
+      await imapService.connect(mockAccount);
+      const result = await imapService.getAttachmentContent(mockAccount.id, 'INBOX', 42, 'report.pdf');
+
+      expect(result.content.toString()).toBe('%PDF-1.4');
+      expect(result.contentType).toBe('application/pdf');
+      expect(mockInstance.downloadMock).toHaveBeenCalledWith(42, '2', { uid: true });
+      expect(mockInstance.fetchOneMock).not.toHaveBeenCalledWith(42, { source: true }, { uid: true });
+      expect(mockedSimpleParser.mock.calls.length).toBe(parsesAvant);
     });
 
     it('should download attachment by filename', async () => {

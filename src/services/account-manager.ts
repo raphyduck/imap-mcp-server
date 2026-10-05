@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
@@ -9,6 +9,8 @@ export class AccountManager {
   private configPath: string;
   private accounts: Map<string, ImapAccount> = new Map();
   private encryptionKey: string;
+  // Date et taille du fichier tel qu'il a ete charge : il n'est relu que s'il a change.
+  private loadedStamp: string | null = null;
 
   constructor() {
     this.configPath = path.join(os.homedir(), '.imap-mcp', 'accounts.json');
@@ -223,10 +225,27 @@ export class AccountManager {
     return decrypted;
   }
 
+  private fileStamp(): string | null {
+    try {
+      const stat = statSync(this.configPath);
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return null;
+    }
+  }
+
   private loadAccountsSync(): void {
+    // Chaque outil relisait et redechiffrait le fichier des comptes a chaque appel
+    // (05/10/2026) ; il ne change qu'a une (rare) ecriture, par ce processus ou un
+    // autre : la date et la taille suffisent a le savoir.
+    const stamp = this.fileStamp();
+    if (stamp !== null && stamp === this.loadedStamp) {
+      return;
+    }
     try {
       const data = readFileSync(this.configPath, 'utf-8');
       const accounts = JSON.parse(data) as ImapAccount[];
+      this.loadedStamp = stamp;
 
       this.accounts.clear();
       for (const account of accounts) {

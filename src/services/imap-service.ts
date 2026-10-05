@@ -89,8 +89,19 @@ function enrichConnectionError(error: unknown, host: string): string {
  * "Request timeout" anonyme cote client pendant que le backend travaille encore.
  */
 const GREETING_TIMEOUT_MS = Number(process.env.IMAP_GREETING_TIMEOUT_MS ?? 8000);
-const SOCKET_TIMEOUT_MS = Number(process.env.IMAP_SOCKET_TIMEOUT_MS ?? 25000);
+// 60 s (25 s jusqu'au 05/10/2026) : un SEARCH ou un MOVE de cent UID sur une grosse
+// boite depasse 25 s sans etre en panne.
+const SOCKET_TIMEOUT_MS = Number(process.env.IMAP_SOCKET_TIMEOUT_MS ?? 60000);
 const CONNECT_DEADLINE_MS = Number(process.env.IMAP_CONNECT_DEADLINE_MS ?? 30000);
+// Une connexion sans appel depuis ce delai est fermee par LOGOUT (05/10/2026). Avant,
+// une session restait ouverte tant que le processus vivait : N agents sur les memes
+// comptes = N sessions par compte, jusqu'aux plafonds des fournisseurs (Gmail 15,
+// Outlook et Dovecot 10 a 20). La reconnexion est paresseuse et deja prise en charge.
+const IDLE_LOGOUT_MS = Number(process.env.IMAP_IDLE_LOGOUT_MS ?? 600000);
+const REAPER_INTERVAL_MS = 60000;
+// La liste des dossiers change rarement : LIST etait refait avant chaque ecriture
+// (corbeille, Envoyes, Brouillons, existence d'un dossier).
+const FOLDER_LIST_TTL_MS = Number(process.env.IMAP_FOLDER_LIST_TTL_MS ?? 60000);
 
 /** Identite lisible d'un compte, pour que toute erreur dise DE QUI on parle. */
 function accountLabel(a: { id: string; name?: string; user: string; host: string }): string {
@@ -114,6 +125,30 @@ interface ConnectionState {
   client: ImapFlow;
   account: ImapAccount;
   isConnected: boolean;
+  lastUsed: number;
+}
+
+/** Lit un flux en entier (pour une piece jointe telechargee a part). */
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Cherche dans un BODYSTRUCTURE la partie dont le nom ou le Content-ID est `wanted`. */
+function findAttachmentPart(node: any, wanted: string): any | undefined {
+  if (!node) return undefined;
+  const name = node.dispositionParameters?.filename ?? node.parameters?.name;
+  const id = typeof node.id === 'string' ? node.id.replace(/^<|>$/g, '') : undefined;
+  const target = wanted.replace(/^<|>$/g, '');
+  if (node.part && (name === wanted || id === target)) return node;
+  for (const child of node.childNodes || []) {
+    const found = findAttachmentPart(child, wanted);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 interface EmailContentOptions {
@@ -127,6 +162,11 @@ export class ImapService {
   private reconnectAttempts: Map<string, number> = new Map();
   private maxReconnectAttempts = 3;
   private accountManager?: AccountManager;
+  // Une connexion en cours par compte : deux outils qui demandent le meme compte
+  // en meme temps attendent la meme poignee de main au lieu d'en faire deux.
+  private connecting: Map<string, Promise<void>> = new Map();
+  private folderLists: Map<string, { at: number; list: Folder[] }> = new Map();
+  private reaper?: NodeJS.Timeout;
 
   setAccountManager(accountManager: AccountManager): void {
     this.accountManager = accountManager;
@@ -135,9 +175,17 @@ export class ImapService {
   async connect(account: ImapAccount): Promise<void> {
     const existing = this.connections.get(account.id);
     if (existing?.isConnected) {
+      existing.lastUsed = Date.now();
       return;
     }
+    const inFlight = this.connecting.get(account.id);
+    if (inFlight) return inFlight;
+    const attempt = this.openConnection(account).finally(() => this.connecting.delete(account.id));
+    this.connecting.set(account.id, attempt);
+    return attempt;
+  }
 
+  private async openConnection(account: ImapAccount): Promise<void> {
     const client = new ImapFlow({
       host: account.host,
       port: account.port,
@@ -176,21 +224,53 @@ export class ImapService {
       client,
       account,
       isConnected: true,
+      lastUsed: Date.now(),
     });
     this.reconnectAttempts.set(account.id, 0);
+    this.startReaper();
   }
 
   async disconnect(accountId: string): Promise<void> {
     const state = this.connections.get(accountId);
     if (state) {
       try {
-        await state.client.logout();
+        await withDeadline(state.client.logout(), 5000, `LOGOUT ${accountLabel(state.account)}`);
       } catch {
-        // Ignore logout errors
+        try { state.client.close(); } catch { /* deja fermee */ }
       }
       this.connections.delete(accountId);
       this.reconnectAttempts.delete(accountId);
     }
+  }
+
+  /** Ferme toutes les connexions (arret du processus : SIGTERM, fin de stdin). */
+  async disconnectAll(): Promise<void> {
+    if (this.reaper) {
+      clearInterval(this.reaper);
+      this.reaper = undefined;
+    }
+    await Promise.allSettled(Array.from(this.connections.keys()).map(id => this.disconnect(id)));
+  }
+
+  private startReaper(): void {
+    if (this.reaper || IDLE_LOGOUT_MS <= 0) return;
+    this.reaper = setInterval(() => { void this.reapIdle(); }, Math.min(REAPER_INTERVAL_MS, IDLE_LOGOUT_MS));
+    this.reaper.unref?.();
+  }
+
+  /** LOGOUT des connexions sans appel depuis IDLE_LOGOUT_MS, hors commande en cours. */
+  async reapIdle(now: number = Date.now()): Promise<string[]> {
+    const closed: string[] = [];
+    for (const [accountId, state] of Array.from(this.connections.entries())) {
+      if (now - state.lastUsed < IDLE_LOGOUT_MS) continue;
+      // `idling` est faux pendant qu'une commande tourne (un bulk de 5 000 messages
+      // rafraichit lastUsed a chaque lot, mais un seul FETCH tres long ne le fait pas).
+      if ((state.client as any).idling === false && state.isConnected) continue;
+      await this.disconnect(accountId);
+      closed.push(accountId);
+      console.error(`[IMAP] ${accountLabel(state.account)} : LOGOUT apres ${Math.round(IDLE_LOGOUT_MS / 1000)} s sans appel`);
+    }
+    return closed;
   }
 
   private async ensureConnected(accountId: string): Promise<ImapFlow> {
@@ -236,10 +316,15 @@ export class ImapService {
       }
     }
 
+    state.lastUsed = Date.now();
     return state.client;
   }
 
   async listFolders(accountId: string): Promise<Folder[]> {
+    const cached = this.folderLists.get(accountId);
+    if (cached && Date.now() - cached.at < FOLDER_LIST_TTL_MS) {
+      return cached.list;
+    }
     const client = await this.ensureConnected(accountId);
     const folders: Folder[] = [];
 
@@ -254,7 +339,12 @@ export class ImapService {
       });
     }
 
+    this.folderLists.set(accountId, { at: Date.now(), list: folders });
     return folders;
+  }
+
+  private forgetFolderList(accountId: string): void {
+    this.folderLists.delete(accountId);
   }
 
   private convertFolderList(folders: any[]): Folder[] {
@@ -267,19 +357,25 @@ export class ImapService {
     }));
   }
 
-  async selectFolder(accountId: string, folderName: string): Promise<any> {
-    const client = await this.ensureConnected(accountId);
-    return await client.mailboxOpen(folderName);
-  }
-
   /**
-   * Etat complet d'un dossier : mailboxOpen (imapflow) + STATUS + QUOTA si supporte.
-   * mailboxOpen ne renvoie PAS d'objet `messages` : c'est ce qui faisait planter
-   * imap_folder_status avec "Cannot read properties of undefined (reading 'total')".
+   * Etat complet d'un dossier : SELECT (via le verrou de boite d'imapflow) + STATUS + QUOTA
+   * si supporte. mailboxOpen ne renvoie PAS d'objet `messages` : c'est ce qui faisait
+   * planter imap_folder_status avec "Cannot read properties of undefined (reading 'total')".
+   *
+   * Sous le VERROU, et c'est le point (05/10/2026) : un mailboxOpen nu changeait la boite
+   * courante sous les pieds d'un outil qui tenait le verrou sur une autre (un MOVE par
+   * UID partait alors du mauvais dossier). Le verrou ouvre la boite lui-meme.
    */
   async folderStatus(accountId: string, folderName: string): Promise<any> {
     const client: any = await this.ensureConnected(accountId);
-    const box: any = await client.mailboxOpen(folderName);
+    let lock;
+    let box: any = null;
+    try {
+      lock = await client.getMailboxLock(folderName);
+      box = client.mailbox || null;
+    } finally {
+      if (lock) lock.release();
+    }
     let status: any = null;
     try {
       status = await client.status(folderName, {
@@ -302,31 +398,25 @@ export class ImapService {
     return { box, status, quota };
   }
 
-  async getFolderStatus(accountId: string, folderName: string): Promise<{
-    messages: number;
-    recent: number;
-    unseen: number;
-    uidValidity: number;
-    uidNext: number;
-  }> {
-    const client = await this.ensureConnected(accountId);
-    const status = await client.status(folderName, {
-      messages: true,
-      recent: true,
-      unseen: true,
-      uidNext: true,
-      uidValidity: true,
-    });
-    return {
-      messages: Number(status.messages ?? 0),
-      recent: Number(status.recent ?? 0),
-      unseen: Number(status.unseen ?? 0),
-      uidValidity: Number(status.uidValidity ?? 0),
-      uidNext: Number(status.uidNext ?? 0),
-    };
+  async searchEmails(accountId: string, folderName: string, criteria: SearchCriteria): Promise<EmailMessage[]> {
+    return (await this.searchEmailsLimited(accountId, folderName, criteria)).messages;
   }
 
-  async searchEmails(accountId: string, folderName: string, criteria: SearchCriteria): Promise<EmailMessage[]> {
+  /**
+   * Recherche cote serveur, puis enveloppes des `limit` messages les plus recents SEULEMENT.
+   *
+   * Jusqu'au 05/10/2026 toute recherche telechargeait l'enveloppe de TOUS les UID trouves
+   * avant que l'outil n'en garde 50 : sur une boite de 100 000 messages, une recherche
+   * large faisait transiter 100 000 enveloppes, socket occupee plusieurs minutes.
+   * `uids` rend la liste complete (triee du plus recent au plus ancien) pour les
+   * operations en masse, qui n'ont pas besoin des enveloppes.
+   */
+  async searchEmailsLimited(
+    accountId: string,
+    folderName: string,
+    criteria: SearchCriteria,
+    limit?: number,
+  ): Promise<{ messages: EmailMessage[]; uids: number[]; totalFound: number }> {
     const client = await this.ensureConnected(accountId);
 
     let lock;
@@ -334,39 +424,46 @@ export class ImapService {
       lock = await client.getMailboxLock(folderName);
 
       const searchQuery = this.buildSearchQuery(criteria);
-      const uids = await client.search(searchQuery, { uid: true });
+      const found = await client.search(searchQuery, { uid: true });
 
-      if (!uids || uids.length === 0) {
-        return [];
+      if (!found || found.length === 0) {
+        return { messages: [], uids: [], totalFound: 0 };
       }
 
-      const messages: EmailMessage[] = [];
-
-      for await (const msg of client.fetch(uids, {
-        uid: true,
-        envelope: true,
-        flags: true,
-        internalDate: true,
-      }, { uid: true })) {
-        messages.push({
-          uid: msg.uid,
-          date: new Date(msg.internalDate || msg.envelope?.date || Date.now()),
-          from: msg.envelope?.from?.[0] ? this.formatAddress(msg.envelope.from[0]) : '',
-          to: msg.envelope?.to?.map((addr: any) => this.formatAddress(addr)) || [],
-          cc: msg.envelope?.cc?.map((addr: any) => this.formatAddress(addr)) || [],
-          subject: msg.envelope?.subject || '',
-          messageId: msg.envelope?.messageId || '',
-          inReplyTo: msg.envelope?.inReplyTo,
-          flags: Array.from(msg.flags || []),
-        });
-      }
-
-      return messages;
+      const uids = [...found].sort((a, b) => b - a);
+      // limit absent : toutes les enveloppes ; 0 : aucune (on ne veut que les UID).
+      const wanted = limit === 0 ? [] : (limit && limit > 0 ? uids.slice(0, limit) : uids);
+      const messages = await this.fetchEnvelopes(client, wanted);
+      return { messages, uids, totalFound: uids.length };
     } finally {
       if (lock) {
         lock.release();
       }
     }
+  }
+
+  private async fetchEnvelopes(client: ImapFlow, uids: number[]): Promise<EmailMessage[]> {
+    const messages: EmailMessage[] = [];
+    if (uids.length === 0) return messages;
+    for await (const msg of client.fetch(uids, {
+      uid: true,
+      envelope: true,
+      flags: true,
+      internalDate: true,
+    }, { uid: true })) {
+      messages.push({
+        uid: msg.uid,
+        date: new Date(msg.internalDate || msg.envelope?.date || Date.now()),
+        from: msg.envelope?.from?.[0] ? this.formatAddress(msg.envelope.from[0]) : '',
+        to: msg.envelope?.to?.map((addr: any) => this.formatAddress(addr)) || [],
+        cc: msg.envelope?.cc?.map((addr: any) => this.formatAddress(addr)) || [],
+        subject: msg.envelope?.subject || '',
+        messageId: msg.envelope?.messageId || '',
+        inReplyTo: msg.envelope?.inReplyTo,
+        flags: Array.from(msg.flags || []),
+      });
+    }
+    return messages;
   }
 
   async getLatestEmails(accountId: string, folderName: string, count: number): Promise<EmailMessage[]> {
@@ -382,26 +479,7 @@ export class ImapService {
       }
 
       const latestUids = [...uids].sort((a, b) => a - b).slice(-count);
-      const messages: EmailMessage[] = [];
-
-      for await (const msg of client.fetch(latestUids, {
-        uid: true,
-        envelope: true,
-        flags: true,
-        internalDate: true,
-      }, { uid: true })) {
-        messages.push({
-          uid: msg.uid,
-          date: new Date(msg.internalDate || msg.envelope?.date || Date.now()),
-          from: msg.envelope?.from?.[0] ? this.formatAddress(msg.envelope.from[0]) : '',
-          to: msg.envelope?.to?.map((addr: any) => this.formatAddress(addr)) || [],
-          cc: msg.envelope?.cc?.map((addr: any) => this.formatAddress(addr)) || [],
-          subject: msg.envelope?.subject || '',
-          messageId: msg.envelope?.messageId || '',
-          inReplyTo: msg.envelope?.inReplyTo,
-          flags: Array.from(msg.flags || []),
-        });
-      }
+      const messages = await this.fetchEnvelopes(client, latestUids);
 
       return messages.sort((a, b) => b.date.getTime() - a.date.getTime());
     } finally {
@@ -592,6 +670,23 @@ export class ImapService {
     try {
       lock = await client.getMailboxLock(folderName);
 
+      // D'abord la structure seule (quelques centaines d'octets) et le telechargement de
+      // la seule partie voulue, en flux. Jusqu'au 05/10/2026 le message ENTIER etait
+      // telecharge puis parse pour en extraire une piece : trois fois sa taille en memoire.
+      const structure: any = await client.fetchOne(uid, { bodyStructure: true }, { uid: true });
+      const part = structure?.bodyStructure ? findAttachmentPart(structure.bodyStructure, filename) : undefined;
+      if (part && typeof (client as any).download === 'function') {
+        const { meta, content } = await (client as any).download(uid, part.part, { uid: true });
+        if (content) {
+          return {
+            content: await streamToBuffer(content),
+            contentType: meta?.contentType || part.type || 'application/octet-stream',
+            filename: meta?.filename || part.dispositionParameters?.filename || part.parameters?.name || filename,
+          };
+        }
+      }
+
+      // Repli : serveur sans BODYSTRUCTURE exploitable, ou piece introuvable par la structure.
       const source = await client.fetchOne(uid, { source: true }, { uid: true });
 
       if (!source || !source.source) {
@@ -661,13 +756,14 @@ export class ImapService {
    * messages never actually leave the source folder.
    */
   private async resolveTrashFolder(accountId: string): Promise<string | null> {
-    const client = await this.ensureConnected(accountId);
+    await this.ensureConnected(accountId);
     const connState = this.connections.get(accountId);
     const isGmail = connState?.account?.host?.includes('gmail') || connState?.account?.host?.includes('google');
 
     // 1. SPECIAL-USE flag (RFC 6154) — most reliable
     try {
-      const folders = await client.list();
+      // Liste en cache (FOLDER_LIST_TTL_MS) : un LIST par ecriture, c'etait un par message.
+      const folders = (await this.listFolders(accountId)).map(f => ({ path: f.name, specialUse: f.specialUse }));
       const trash = folders.find((f: any) => f.specialUse === '\\Trash');
       if (trash) return trash.path;
 
@@ -733,7 +829,7 @@ export class ImapService {
     chunkSize: number = 50,
     onProgress?: (deleted: number, total: number) => void
   ): Promise<{ deleted: number; failed: number; errors: string[] }> {
-    const client = await this.ensureConnected(accountId);
+    await this.ensureConnected(accountId);
     const trashFolder = await this.resolveTrashFolder(accountId);
     if (!trashFolder) {
       return {
@@ -754,8 +850,9 @@ export class ImapService {
 
       let lock;
       try {
-        // Ensure we're still connected before each chunk
-        await this.ensureConnected(accountId);
+        // Reconnecte si besoin ET reprend le client : apres une reconnexion en plein
+        // bulk, l'instance d'avant est morte et tous les lots suivants echouaient.
+        const client = await this.ensureConnected(accountId);
 
         lock = await client.getMailboxLock(folderName);
 
@@ -832,9 +929,8 @@ export class ImapService {
   }
 
   async folderExists(accountId: string, folderPath: string): Promise<boolean> {
-    const client = await this.ensureConnected(accountId);
-    const list = await client.list();
-    return list.some(f => f.path === folderPath);
+    const list = await this.listFolders(accountId);
+    return list.some(f => f.name === folderPath);
   }
 
   async createFolder(
@@ -842,6 +938,7 @@ export class ImapService {
     folderPath: string,
   ): Promise<{ path: string; created: boolean; alreadyExisted: boolean }> {
     const client = await this.ensureConnected(accountId);
+    this.forgetFolderList(accountId);
     try {
       const result = await client.mailboxCreate(folderPath);
       const path = (result && typeof result === 'object' && 'path' in result) ? (result as any).path : folderPath;
@@ -946,11 +1043,6 @@ export class ImapService {
       return false;
     }
     return this.appendMessage(accountId, folder, rawMessage, ['\\Seen']);
-  }
-
-  async findFolderByNames(accountId: string, candidates: string[]): Promise<string | undefined> {
-    const folders = await this.listFolders(accountId);
-    return folders.find(f => candidates.includes(f.name))?.name;
   }
 
   /**
@@ -1077,7 +1169,7 @@ export class ImapService {
     chunkSize: number = 100,
     options?: { createDestinationIfMissing?: boolean }
   ): Promise<{ moved: number; failed: number; errors: string[]; destinationCreated?: boolean }> {
-    const client = await this.ensureConnected(accountId);
+    await this.ensureConnected(accountId);
     let destinationCreated = false;
     if (options?.createDestinationIfMissing) {
       const exists = await this.folderExists(accountId, targetFolder);
@@ -1093,7 +1185,7 @@ export class ImapService {
       const chunk = uids.slice(i, i + chunkSize);
       let lock;
       try {
-        await this.ensureConnected(accountId);
+        const client = await this.ensureConnected(accountId);
         lock = await client.getMailboxLock(folderName);
         await client.messageMove(chunk.join(','), targetFolder, { uid: true });
         moved += chunk.length;
@@ -1120,7 +1212,7 @@ export class ImapService {
     seen: boolean,
     chunkSize: number = 200
   ): Promise<{ updated: number; failed: number; errors: string[] }> {
-    const client = await this.ensureConnected(accountId);
+    await this.ensureConnected(accountId);
     let updated = 0;
     let failed = 0;
     const errors: string[] = [];
@@ -1128,7 +1220,7 @@ export class ImapService {
       const chunk = uids.slice(i, i + chunkSize);
       let lock;
       try {
-        await this.ensureConnected(accountId);
+        const client = await this.ensureConnected(accountId);
         lock = await client.getMailboxLock(folderName);
         if (seen) {
           await client.messageFlagsAdd(chunk.join(','), ['\\Seen'], { uid: true });

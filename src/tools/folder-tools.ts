@@ -158,7 +158,8 @@ export function folderTools(
     
     for (const folderName of foldersToCheck) {
       try {
-        const unreadMessages = await imapService.searchEmails(accountId, folderName, { seen: false });
+        // UID seuls : compter ne demande aucune enveloppe.
+        const unreadMessages = (await imapService.searchEmailsLimited(accountId, folderName, { seen: false }, 0)).uids;
         const count = unreadMessages.length;
         unreadCounts[folderName] = count;
         totalUnread += count;
