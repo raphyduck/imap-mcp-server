@@ -69,6 +69,7 @@ export function emailTools(
 
   // Search emails tool
   server.registerTool('imap_search_emails', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Search a mailbox folder for emails matching criteria (sender, recipient, subject, body text, date range, read/flagged status). Use this to FIND messages when you know something about them but not their UID — e.g. "emails from amazon last week", "unread invoices". Returns lightweight headers (uid, from, subject, date); call imap_get_email with a returned uid to read full content. For the newest messages without criteria, prefer imap_get_latest_emails.',
     inputSchema: {
       ...accountSelector,
@@ -112,6 +113,7 @@ export function emailTools(
 
   // Get email content tool
   server.registerTool('imap_get_email', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Read the FULL content of a single email by its UID (plain text + HTML body, sender/recipients, date, attachment list, optional raw headers and text-attachment previews). Use after imap_search_emails or imap_get_latest_emails gives you a uid. Body text is truncated to maxContentLength to protect the context window — raise it for long messages. To fetch attachment bytes, use imap_download_attachment.',
     inputSchema: {
       ...accountSelector,
@@ -154,6 +156,7 @@ export function emailTools(
 
   // Upload file tool - writes a file to the server for use as an email attachment
   server.registerTool('imap_upload_file', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-envoi', 'hobbitton.at/agit': true },
     description: `Upload a file to the server for use as an email attachment. Returns a path that can be used with imap_send_email attachments. This allows sending large attachments without hitting context window limits. Max size: ${MAX_UPLOAD_SIZE} bytes (configurable via IMAP_MAX_UPLOAD_SIZE). Uploads are auto-deleted after ${UPLOAD_TTL_MS} ms (configurable via IMAP_UPLOAD_TTL_MS).`,
     inputSchema: {
       filename: z.string().describe('Filename to save as'),
@@ -214,6 +217,7 @@ export function emailTools(
 
   // Download attachment tool
   server.registerTool('imap_download_attachment', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Download a single attachment from an email (folder + uid + attachment filename/contentId, as listed by imap_get_email). Images are returned inline for viewing; PDFs are saved and their text is extracted inline (extractText); other files are saved to the shared downloads directory (or savePath). Use when the user wants the actual file contents, not just the message body.',
     inputSchema: {
       ...accountSelector,
@@ -303,6 +307,7 @@ export function emailTools(
 
   // Mark email as read tool
   server.registerTool('imap_mark_as_read', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Mark an email as read',
     inputSchema: {
       ...accountSelector,
@@ -326,6 +331,7 @@ export function emailTools(
 
   // Mark email as unread tool
   server.registerTool('imap_mark_as_unread', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Mark an email as unread',
     inputSchema: {
       ...accountSelector,
@@ -349,6 +355,7 @@ export function emailTools(
 
   // Delete email tool
   server.registerTool('imap_delete_email', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-suppression', 'hobbitton.at/agit': true },
     description: 'Delete ONE email by folder + uid (moves to Trash or expunges, server-dependent). Destructive and not easily undone — confirm the user means this specific message. To remove many at once use imap_bulk_delete (known uids) or imap_bulk_delete_by_search (by criteria, supports dryRun). To file an email away instead of deleting, use imap_move_email.',
     inputSchema: {
       ...accountSelector,
@@ -372,6 +379,7 @@ export function emailTools(
 
   // Move email to another folder
   server.registerTool('imap_move_email', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Move an email from one folder to another (e.g., INBOX to Taxes, or INBOX to Archive). Optionally creates the destination folder if it does not exist.',
     inputSchema: {
       ...accountSelector,
@@ -423,6 +431,7 @@ export function emailTools(
   // Bulk delete emails tool
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_bulk_delete', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-suppression', 'hobbitton.at/agit': true },
     description: 'Delete multiple emails at once with chunking and auto-reconnection. Processes deletions in batches to prevent connection timeouts.',
     inputSchema: {
       ...accountSelector,
@@ -453,6 +462,7 @@ export function emailTools(
 
   // Bulk delete by search criteria tool
   server.registerTool('imap_bulk_delete_by_search', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-suppression', 'hobbitton.at/agit': true },
     description: 'Search for emails matching criteria and delete them all. Useful for cleaning up spam or unwanted emails.',
     inputSchema: {
       ...accountSelector,
@@ -535,6 +545,7 @@ export function emailTools(
 
   // Bulk move by search criteria tool
   server.registerTool('imap_bulk_move_by_search', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Search for emails matching criteria and MOVE them all to another folder (e.g. archive newsletters: from "substack.com" -> "Archive"). Supports a read/unread filter via "seen" and a dryRun preview. Creates the destination folder if missing by default. Efficient chunked bulk operation.',
     inputSchema: {
       ...accountSelector,
@@ -573,6 +584,7 @@ export function emailTools(
 
   // Bulk mark read/unread by search criteria tool
   server.registerTool('imap_bulk_mark_by_search', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Search for emails matching criteria and mark them all as read or unread. markAs="read" clears notification noise; markAs="unread" resurfaces. Supports a "seen" filter (e.g. act only on currently-unread) and a dryRun preview. Efficient chunked bulk operation.',
     inputSchema: {
       ...accountSelector,
@@ -610,6 +622,7 @@ export function emailTools(
 
   // Bulk move by explicit UIDs
   server.registerTool('imap_bulk_move', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Move multiple emails (by UID list) to another folder, chunked. To move by search criteria instead, use imap_bulk_move_by_search.',
     inputSchema: {
       ...accountSelector,
@@ -627,6 +640,7 @@ export function emailTools(
 
   // Bulk mark read/unread by explicit UIDs
   server.registerTool('imap_bulk_mark', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': true },
     description: 'Mark multiple emails (by UID list) as read or unread, chunked. To mark by search criteria instead, use imap_bulk_mark_by_search.',
     inputSchema: {
       ...accountSelector,
@@ -643,6 +657,7 @@ export function emailTools(
 
   // Get latest emails tool
   server.registerTool('imap_get_latest_emails', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Get the most recent emails from a folder, newest first. Use this for "what just came in?" / "show my latest inbox messages" when no search filter is needed. Returns lightweight headers (uid, from, subject, date); read a specific one with imap_get_email. To filter by sender/subject/date instead, use imap_search_emails.',
     inputSchema: {
       ...accountSelector,
@@ -666,6 +681,7 @@ export function emailTools(
   // Send email tool
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_send_email', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-envoi', 'hobbitton.at/agit': true },
     description: 'Compose and send a NEW email via the account\'s SMTP server (a copy is saved to Sent unless disabled). Use for fresh outbound messages. To respond to an existing message use imap_reply_to_email (keeps threading); to pass a message on use imap_forward_email; to store without sending use imap_save_draft. Supports to/cc/bcc, text and/or HTML, and attachments by base64 content or by file path (see imap_upload_file for large files).',
     inputSchema: {
       ...accountSelector,
@@ -729,6 +745,7 @@ export function emailTools(
   // Save draft tool — composes a message and appends it to the Drafts folder with the \Draft flag
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_save_draft', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Save an email as a draft in the Drafts folder (no send). Takes the same fields as imap_send_email.',
     inputSchema: {
       ...accountSelector,
@@ -798,6 +815,7 @@ export function emailTools(
   // Reply to email tool
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_reply_to_email', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-envoi', 'hobbitton.at/agit': true },
     description: 'Reply to an existing email identified by folder + uid. Automatically sets the recipient to the original sender, prefixes the subject with "Re:", and preserves threading (In-Reply-To/References). Set replyAll to also include the original To AND Cc recipients; use cc/bcc to add further recipients. Use this instead of imap_send_email whenever the user is responding to a message already in a mailbox.',
     inputSchema: {
       ...accountSelector,
@@ -912,6 +930,7 @@ export function emailTools(
 
   // Forward email tool
   server.registerTool('imap_forward_email', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-envoi', 'hobbitton.at/agit': true },
     description: 'Forward an existing email (folder + uid) to new recipients, quoting the original message and headers. Optionally include the original attachments. Use when the user wants to pass an existing message on to someone else; use imap_reply_to_email instead to respond to the sender.',
     inputSchema: {
       ...accountSelector,
@@ -969,6 +988,7 @@ export function emailTools(
 
   // Find thread messages tool
   server.registerTool('imap_find_thread_messages', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description:
       'Find messages in `searchFolder` that belong to the same conversation threads as messages already in `sourceFolder`. ' +
       'Useful for catching replies that arrived after a thread was sorted. Works on any IMAP server (uses RFC 3501 HEADER search on In-Reply-To and References).',

@@ -41,6 +41,7 @@ export function pdfExportTools(
   accountManager: AccountManager
 ): void {
   server.registerTool('imap_export_email_pdf', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': true },
     description:
       'Render an email (headers + body text) to a PDF file saved server-side under the shared volume (default /srv/filemcp). ' +
       'Meant for receipts/invoices that have NO attachment (Stripe, SaaS receipts, dividend notices): the resulting PDF can be ' +

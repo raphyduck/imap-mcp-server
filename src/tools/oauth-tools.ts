@@ -25,6 +25,7 @@ export function oauthTools(
 
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth limit.
   server.registerTool('imap_oauth_start', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Start an OAuth2 (XOAUTH2) sign-in for a Microsoft mailbox (hotmail.*, outlook.*, live.*), where IMAP password login is disabled ("Login is disabled"). Default flow "authcode": returns authorizeUrl; open it, sign in with the mailbox, accept; the browser then lands on an error page at http://localhost/?code=...&state=... : pass that full URL as redirectUrl to imap_oauth_complete. Flow "device" returns verificationUri + userCode instead (refused at consent for personal accounts with the default client ID).',
     inputSchema: {
       flow: z.enum(['authcode', 'device']).default('authcode').describe('authcode (default) or device'),
@@ -46,6 +47,7 @@ export function oauthTools(
 
   // @ts-expect-error TS2589
   server.registerTool('imap_oauth_complete', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Finish a Microsoft OAuth2 sign-in started with imap_oauth_start: with redirectUrl (authcode flow) exchanges the code; with userCode (device flow) waits for the approval (up to waitSeconds). Then creates the IMAP/SMTP account (outlook.office365.com / smtp-mail.outlook.com, XOAUTH2) or, with accountId, stores the new refresh token on an existing account. Tests the IMAP connection.',
     inputSchema: {
       redirectUrl: z.string().optional().describe('authcode flow: full http://localhost/?code=...&state=... URL reached after accepting'),
