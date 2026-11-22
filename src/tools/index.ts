@@ -10,6 +10,11 @@ import { folderTools } from './folder-tools.js';
 import { spamTools } from './spam-tools.js';
 import { pdfExportTools } from './pdf-export-tools.js';
 
+// Chaque outil declare dans `_meta` (config de registerTool) son connecteur, la famille
+// de droits a laquelle il appartient, « hobbitton.at/connecteur » (null : servi mais
+// ferme), et s'il agit, « hobbitton.at/agit » (ecrit, envoie, supprime, modifie). Le
+// planificateur de la plateforme construit sa table d'acces depuis ce que publie
+// `tools/list` ; tests/tool-declarations.test.ts echoue pour un outil publie sans declaration.
 export function registerTools(
   server: McpServer,
   imapService: ImapService,

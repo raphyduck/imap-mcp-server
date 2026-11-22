@@ -14,6 +14,7 @@ export function accountTools(
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type
   // instantiation depth limit. Schema validation is unaffected at runtime.
   server.registerTool('imap_add_account', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Add a new IMAP account configuration',
     inputSchema: {
       name: z.string().describe('Friendly name for the account'),
@@ -61,6 +62,7 @@ export function accountTools(
 
   // Update account tool — lets callers fix SMTP config (and other fields) on existing accounts
   server.registerTool('imap_update_account', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Update an existing IMAP account. Useful for fixing SMTP settings without removing and re-adding the account.',
     inputSchema: {
       accountId: z.string().describe('ID of the account to update'),
@@ -128,6 +130,7 @@ export function accountTools(
 
   // List accounts tool
   server.registerTool('imap_list_accounts', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'List all configured IMAP accounts',
     inputSchema: {}
   }, async () => {
@@ -152,6 +155,7 @@ export function accountTools(
 
   // Remove account tool
   server.registerTool('imap_remove_account', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Remove an IMAP account configuration',
     inputSchema: {
       accountId: z.string().describe('ID of the account to remove'),
@@ -173,6 +177,7 @@ export function accountTools(
 
   // Connect to account tool
   server.registerTool('imap_connect', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Connect to an IMAP account',
     inputSchema: {
       accountId: z.string().optional().describe('Account ID to connect to'),
@@ -209,6 +214,7 @@ export function accountTools(
 
   // Disconnect from account tool
   server.registerTool('imap_disconnect', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Disconnect from an IMAP account',
     inputSchema: {
       accountId: z.string().describe('Account ID to disconnect from'),
@@ -229,6 +235,7 @@ export function accountTools(
 
   // Test account connection tool (without re-entering password)
   server.registerTool('imap_test_account', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-comptes', 'hobbitton.at/agit': true },
     description: 'Test an existing account connection without re-entering credentials. Validates IMAP connectivity and returns folder count and message count.',
     inputSchema: {
       accountId: z.string().describe('Account ID to test'),

@@ -17,6 +17,7 @@ export function folderTools(
 ): void {
   // List folders tool
   server.registerTool('imap_list_folders', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'List all folders/mailboxes for an account (names, hierarchy delimiter, attributes). Use this first to discover exact folder names before searching, moving, or creating subfolders — folder naming varies by provider (e.g. "Archive" vs "[Gmail]/All Mail" vs "INBOX.Archive").',
     inputSchema: {
       ...accountSelector,
@@ -42,6 +43,7 @@ export function folderTools(
 
   // Get folder status tool
   server.registerTool('imap_folder_status', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Get status information about a folder',
     inputSchema: {
       ...accountSelector,
@@ -100,6 +102,7 @@ export function folderTools(
 
   // Create folder tool
   server.registerTool('imap_create_folder', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description:
       'Create a new IMAP folder/mailbox. Most servers also create any missing parent folders ' +
       '(e.g. creating "Archives/2026/2026-05" auto-creates "Archives" and "Archives/2026"). ' +
@@ -143,6 +146,7 @@ export function folderTools(
   // Get unread count tool
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_get_unread_count', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Count unread (unseen) emails per folder, plus a total. Use for "how many unread do I have?" overviews. Defaults to all folders; pass a folders list to limit scope and speed it up.',
     inputSchema: {
       ...accountSelector,

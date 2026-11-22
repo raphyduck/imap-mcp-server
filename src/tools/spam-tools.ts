@@ -10,6 +10,7 @@ export function spamTools(
 ): void {
   // Check emails for spam
   server.registerTool('imap_check_spam', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Check emails in a folder for spam/disposable email domains. Returns spam analysis and domain statistics.',
     inputSchema: {
       accountId: z.string().describe('Account ID'),
@@ -58,6 +59,7 @@ export function spamTools(
   // Delete spam emails
   // @ts-expect-error TS2589: MCP SDK registerTool + zod v3 exceed TS's type instantiation depth. Runtime schema validation is unaffected.
   server.registerTool('imap_delete_spam', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-suppression', 'hobbitton.at/agit': true },
     description: 'Find and delete emails from known spam/disposable email domains.',
     inputSchema: {
       accountId: z.string().describe('Account ID'),
@@ -145,6 +147,7 @@ export function spamTools(
 
   // Get domain statistics
   server.registerTool('imap_domain_stats', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'Get statistics about sender domains in a folder. Useful for identifying bulk senders or spam patterns.',
     inputSchema: {
       accountId: z.string().describe('Account ID'),
@@ -190,6 +193,7 @@ export function spamTools(
 
   // Add custom spam domain
   server.registerTool('imap_add_spam_domain', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Add a domain to the custom spam list. Emails from this domain will be flagged as spam.',
     inputSchema: {
       domain: z.string().describe('Domain to add to spam list (e.g., "spammer.com")'),
@@ -210,6 +214,7 @@ export function spamTools(
 
   // Remove custom spam domain
   server.registerTool('imap_remove_spam_domain', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Remove a domain from the custom spam list.',
     inputSchema: {
       domain: z.string().describe('Domain to remove from spam list'),
@@ -230,6 +235,7 @@ export function spamTools(
 
   // Add whitelist domain
   server.registerTool('imap_add_whitelist_domain', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-gestion', 'hobbitton.at/agit': true },
     description: 'Add a domain to the whitelist. Emails from whitelisted domains will never be flagged as spam.',
     inputSchema: {
       domain: z.string().describe('Domain to whitelist (e.g., "trusted.com")'),
@@ -250,6 +256,7 @@ export function spamTools(
 
   // List known spam domains
   server.registerTool('imap_list_spam_domains', {
+    _meta: { 'hobbitton.at/connecteur': 'imap', 'hobbitton.at/agit': false },
     description: 'List all known spam domains (built-in and custom).',
     inputSchema: {}
   }, async () => {
@@ -272,6 +279,7 @@ export function spamTools(
 
   // Delete emails by domain
   server.registerTool('imap_delete_by_domain', {
+    _meta: { 'hobbitton.at/connecteur': 'imap-suppression', 'hobbitton.at/agit': true },
     description: 'Delete all emails from a specific domain. Useful for cleaning up unwanted newsletters or spam.',
     inputSchema: {
       accountId: z.string().describe('Account ID'),
